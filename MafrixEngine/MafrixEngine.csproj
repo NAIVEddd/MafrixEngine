@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="Shaders\triangle.frag.spv" />
+    <None Remove="Shaders\triangle.vert.spv" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Shaders\triangle.frag.spv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Shaders\triangle.vert.spv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog" Version="2.11.1-dev-01397" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="4.0.2-dev-00890" />
+    <PackageReference Include="Serilog.Sinks.File" Version="5.0.1-dev-00947" />
+    <PackageReference Include="Silk.NET.Assimp" Version="2.15.0" />
+    <PackageReference Include="Silk.NET.Core" Version="2.15.0" />
+    <PackageReference Include="Silk.NET.Input" Version="2.15.0" />
+    <PackageReference Include="Silk.NET.Maths" Version="2.15.0" />
+    <PackageReference Include="Silk.NET.Vulkan" Version="2.15.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.EXT" Version="2.15.0" />
+    <PackageReference Include="Silk.NET.Vulkan.Extensions.KHR" Version="2.15.0" />
+    <PackageReference Include="Silk.NET.Windowing" Version="2.15.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="2.1.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Textures\" />
+    <Folder Include="Asserts\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Asserts\viking_room\scene.bin">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Asserts\viking_room\scene.gltf">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Asserts\viking_room\textures\Texture1_baseColor.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Asserts\viking_room\textures\viking_room.png">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Textures\lim.PNG">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

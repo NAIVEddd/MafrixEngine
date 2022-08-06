@@ -1,0 +1,11 @@
+Model Information:
+* title:	Gaz-66
+* source:	https://sketchfab.com/3d-models/gaz-66-7ded7bb56ffc4f8c9a3ab68de876073e
+* author:	Ashkelon (https://sketchfab.com/Ashkelon)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Gaz-66" (https://sketchfab.com/3d-models/gaz-66-7ded7bb56ffc4f8c9a3ab68de876073e) by Ashkelon (https://sketchfab.com/Ashkelon) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

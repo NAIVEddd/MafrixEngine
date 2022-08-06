@@ -16,6 +16,8 @@ using Silk.NET.Windowing;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
+using MafrixEngine.ModelLoaders;
+
 using Image = Silk.NET.Vulkan.Image;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using SlImage = SixLabors.ImageSharp.Image;
@@ -26,40 +28,7 @@ namespace MafrixEngine.GraphicsWrapper
     using Vec2 = Vector2D<float>;
     using Vec3 = Vector3D<float>;
     using Mat4 = Matrix4X4<float>;
-    public struct Vertex
-    {
-        public Vec3 pos;
-        public Vec3 color;
-        public Vec2 texCoord;
-        public Vertex(Vec3 p, Vec3 c, Vec2 t) => (pos, color, texCoord) = (p, c, t);
-        public unsafe static VertexInputBindingDescription GetBindingDescription()
-        {
-            var bindingDescription = new VertexInputBindingDescription();
-            bindingDescription.Binding = 0;
-            bindingDescription.Stride = (uint) sizeof(Vertex);
-            bindingDescription.InputRate = VertexInputRate.Vertex;
-
-            return bindingDescription;
-        }
-        public unsafe static VertexInputAttributeDescription[] GetAttributeDescriptions()
-        {
-            var attributeDescriptions = new VertexInputAttributeDescription[3];
-            attributeDescriptions[0].Binding = 0;
-            attributeDescriptions[0].Location = 0;
-            attributeDescriptions[0].Format = Format.R32G32B32Sfloat;
-            attributeDescriptions[0].Offset = (uint)Marshal.OffsetOf<Vertex>("pos").ToInt32();
-            attributeDescriptions[1].Binding = 0;
-            attributeDescriptions[1].Location = 1;
-            attributeDescriptions[1].Format = Format.R32G32B32Sfloat;
-            attributeDescriptions[1].Offset = (uint)Marshal.OffsetOf<Vertex>("color").ToInt32();
-            attributeDescriptions[2].Binding = 0;
-            attributeDescriptions[2].Location = 2;
-            attributeDescriptions[2].Format = Format.R32G32Sfloat;
-            attributeDescriptions[2].Offset = (uint)Marshal.OffsetOf<Vertex>("texCoord").ToInt32();
-
-            return attributeDescriptions;
-        }
-    }
+    
 
     public struct UniformBufferObject
     {
@@ -67,6 +36,27 @@ namespace MafrixEngine.GraphicsWrapper
         public Mat4 view;
         public Mat4 proj;
         public UniformBufferObject(Mat4 m, Mat4 v, Mat4 p) => (model, view, proj) = (m, v, p);
+    }
+
+    public struct Mesh : IDisposable
+    {
+        public UniformBufferObject matrices;
+        public Image texture;
+        //public ImageView textureView;
+        public DeviceMemory textureMemory;
+        //public Buffer uniformBuffer;
+        //public DeviceMemory uniformMemory;
+        //public BufferView bufferView;
+        //public DeviceMemory deviceMemory;
+        public DescriptorSet descriptorSet;
+        public UInt32 firstIndex;
+        public UInt32 instanceCount;
+        public Int32 vertexOffset;
+
+        public void Dispose()
+        {
+            //throw new NotImplementedException();
+        }
     }
 
     public class VulkanWrapper : IDisposable
@@ -89,6 +79,9 @@ namespace MafrixEngine.GraphicsWrapper
         public Buffer vertexBuffer;
         public DeviceMemory vertexBufferMemory;
         public Buffer indexBuffer;
+
+        public Mesh[] meshes;
+
         public DeviceMemory indexBufferMemory;
         public Buffer[] uniformBuffers;
         public DeviceMemory[] uniformBuffersMemory;
@@ -97,6 +90,10 @@ namespace MafrixEngine.GraphicsWrapper
         public Image textureImage;
         public DeviceMemory textureImageMemory;
         public ImageView textureImageView;
+        public Image texture2Image;
+        public DeviceMemory texture2ImageMemory;
+        public ImageView texture2ImageView;
+
         public Image depthImage;
         public DeviceMemory depthImageMemory;
         public ImageView depthImageView;
@@ -115,10 +112,12 @@ namespace MafrixEngine.GraphicsWrapper
         public Extent2D swapchainExtent;
         public ImageView[] swapchainImageViews;
 
+        private StagingBuffer staging;
+
         private ExtDebugUtils debugUtils;
         private DebugUtilsMessengerEXT debugMessager;
 
-        public const int MaxFrameInFlight = 8;
+        public const int MaxFrameInFlight = 8 * 2;
         /// <summary>
         /// Extensions and ValidationLayers
         /// </summary>
@@ -188,6 +187,9 @@ namespace MafrixEngine.GraphicsWrapper
             CreateSurface();
             PickPhysicalDevice();
             CreateLogicalDevice();
+
+            staging = new StagingBuffer(vk, physicalDevice, device);
+
             CreateSwapChain();
             CreateImageViews();
             CreateRenderPass();
@@ -298,7 +300,7 @@ namespace MafrixEngine.GraphicsWrapper
                 throw new Exception("failed to present swap chain image!");
             }
 
-            currentFrame = (currentFrame + 1) % MaxFrameInFlight;
+            currentFrame = (currentFrame + 2) % MaxFrameInFlight;
         }
 
         private DateTime startTime;
@@ -306,9 +308,9 @@ namespace MafrixEngine.GraphicsWrapper
         {
             var time = (float)(DateTime.Now - startTime).TotalSeconds;
 
-
-            var model = Mat4.Identity;
-            //var model = Matrix4X4.CreateRotationY<float>(Scalar.DegreesToRadians<float>(time * 90.0f));
+            //var model = Mat4.Identity;
+            var model = Matrix4X4.CreateRotationY<float>(Scalar.DegreesToRadians<float>(time * 90.0f));
+            //var model = Matrix4X4.CreateRotationY<float>(Scalar.DegreesToRadians<float>(time * 90.0f)) * Matrix4X4.CreateScale<float>(0.015f);
             var view = Matrix4X4.CreateLookAt<float>(new Vec3(35.0f, 35.0f, 35.0f), new Vec3(0.0f), new Vec3(0.0f, -1.0f, 0.0f));
             var proj = Matrix4X4.CreatePerspectiveFieldOfView<float>(Scalar.DegreesToRadians<float>(45.0f),
                 (float)swapchainExtent.Width / (float)swapchainExtent.Height, 0.1f, 100.0f);
@@ -912,7 +914,7 @@ namespace MafrixEngine.GraphicsWrapper
             depthStencil.DepthCompareOp = CompareOp.Less;
             depthStencil.DepthBoundsTestEnable = Vk.False;
             depthStencil.MinDepthBounds = 0.0f;
-            depthStencil.MaxDepthBounds = 1.0f;
+            depthStencil.MaxDepthBounds = 100.0f;
             depthStencil.StencilTestEnable = Vk.False;
 
             var pipelineInfo = new GraphicsPipelineCreateInfo(StructureType.GraphicsPipelineCreateInfo);
@@ -1018,9 +1020,16 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateTextureImage()
         {
-            var filename = "Asserts/viking_room/textures/viking_room.png";
-            using var image = SlImage.Load<Rgba32>(filename);
-            var memoryGroup = image.GetPixelMemoryGroup();
+            var filename1 = "Asserts/viking_room/textures/viking_room.png";
+            var filename2 = "Asserts/gaz-66/textures/material_baseColor.png";
+            CreateTextureImage(filename2, out texture2Image, out texture2ImageMemory);
+            CreateTextureImage(filename1, out textureImage, out textureImageMemory);
+        }
+
+        private unsafe void CreateTextureImage(string name, out Image image, out DeviceMemory deviceMemory)
+        {
+            using var texture = SlImage.Load<Rgba32>(name);
+            var memoryGroup = texture.GetPixelMemoryGroup();
             var imageSize = memoryGroup.TotalLength * sizeof(Rgba32);
             Memory<byte> array = new byte[imageSize];
 
@@ -1030,19 +1039,9 @@ namespace MafrixEngine.GraphicsWrapper
                 memory.Span.CopyTo(block);
                 block = block.Slice(memory.Length);
             }
-            var width = image.Width;
-            var height = image.Height;
+            var width = texture.Width;
+            var height = texture.Height;
             mipLevels = (UInt32)Math.Floor(Math.Log2(Math.Max(width, height))) + 1;
-
-            CreateBuffer((ulong)imageSize, BufferUsageFlags.BufferUsageTransferSrcBit,
-                MemoryPropertyFlags.MemoryPropertyHostVisibleBit |
-                MemoryPropertyFlags.MemoryPropertyHostCoherentBit,
-                out var stagingBuffer, out var stagingBufferMemory);
-            void* data = null;
-            vk.MapMemory(device, stagingBufferMemory, 0, (ulong)imageSize, 0, ref data);
-            var dataSpan = new Span<byte>(data, (int)imageSize);
-            array.Span.CopyTo(dataSpan);
-            vk.UnmapMemory(device, stagingBufferMemory);
 
             CreateImage((uint)width, (uint)height, mipLevels,
                 Format.R8G8B8A8Srgb,
@@ -1051,17 +1050,14 @@ namespace MafrixEngine.GraphicsWrapper
                 ImageUsageFlags.ImageUsageTransferDstBit |
                 ImageUsageFlags.ImageUsageSampledBit,
                 MemoryPropertyFlags.MemoryPropertyDeviceLocalBit,
-                out textureImage, out textureImageMemory);
-            TransitionImageLayout(textureImage, mipLevels, Format.R8G8B8A8Srgb,
+                out image, out deviceMemory);
+            TransitionImageLayout(image, mipLevels, Format.R8G8B8A8Srgb,
                 ImageLayout.Undefined, ImageLayout.TransferDstOptimal);
-            CopyBufferToImage(stagingBuffer, textureImage, (uint)width, (uint)height);
-            GenerateMipmaps(textureImage, Format.R8G8B8A8Srgb, (uint)width, (uint)height, mipLevels);
-            //TransitionImageLayout(textureImage, mipLevels, Format.R8G8B8A8Srgb,
-            //    ImageLayout.TransferDstOptimal,
-            //    ImageLayout.ShaderReadOnlyOptimal);
 
-            vk.DestroyBuffer(device, stagingBuffer, null);
-            vk.FreeMemory(device, stagingBufferMemory, null);
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            staging.CopyDataToImage(stCommand, image, (uint)width, (uint)height, array.Span, (uint)imageSize);
+
+            GenerateMipmaps(image, Format.R8G8B8A8Srgb, (uint)width, (uint)height, mipLevels);
         }
 
         private unsafe void GenerateMipmaps(Image image, Format imageFormat, uint width, uint height, uint mipLevels)
@@ -1071,7 +1067,8 @@ namespace MafrixEngine.GraphicsWrapper
             {
                 throw new Exception("texture image format does not support linear blitting.");
             }
-            BeginSingleTimeCommands(out var commandBuffer);
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            stCommand.BeginSingleTimeCommands(out var commandBuffer);
 
             var barrier = new ImageMemoryBarrier(StructureType.ImageMemoryBarrier);
             barrier.Image = image;
@@ -1151,12 +1148,13 @@ namespace MafrixEngine.GraphicsWrapper
                 0, null,
                 0, null, 1, barrier);
 
-            EndSingleTimeCommands(commandBuffer);
+            stCommand.EndSingleTimeCommands(commandBuffer);
         }
 
         private unsafe void CreateTextureImageView()
         {
             CreateImageView(textureImage, mipLevels, Format.R8G8B8A8Srgb, ImageAspectFlags.ImageAspectColorBit, out textureImageView);
+            CreateImageView(texture2Image, mipLevels, Format.R8G8B8A8Srgb, ImageAspectFlags.ImageAspectColorBit, out texture2ImageView);
         }
 
         private unsafe void CreateTextureSampler()
@@ -1242,7 +1240,8 @@ namespace MafrixEngine.GraphicsWrapper
         private unsafe void TransitionImageLayout(Image image, uint mipLevels, Format format,
             ImageLayout oldLayout, ImageLayout newLayout)
         {
-            BeginSingleTimeCommands(out var commandBuffer);
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            stCommand.BeginSingleTimeCommands(out var commandBuffer);
 
             var barrier = new ImageMemoryBarrier(StructureType.ImageMemoryBarrier);
             barrier.OldLayout = oldLayout;
@@ -1300,147 +1299,56 @@ namespace MafrixEngine.GraphicsWrapper
                 0, null,
                 1, barrier);
 
-            EndSingleTimeCommands(commandBuffer);
-        }
-
-        private unsafe void CopyBufferToImage(Buffer buffer, Image image, uint width, uint height)
-        {
-            BeginSingleTimeCommands(out var commandBuffer);
-
-            var region = new BufferImageCopy();
-            region.BufferOffset = 0;
-            region.BufferRowLength = 0;
-            region.BufferImageHeight = 0;
-            region.ImageSubresource.AspectMask = ImageAspectFlags.ImageAspectColorBit;
-            region.ImageSubresource.MipLevel = 0;
-            region.ImageSubresource.BaseArrayLayer = 0;
-            region.ImageSubresource.LayerCount = 1;
-            region.ImageOffset = new Offset3D(0, 0, 0);
-            region.ImageExtent = new Extent3D(width, height, 1);
-            vk.CmdCopyBufferToImage(commandBuffer, buffer, image,
-                ImageLayout.TransferDstOptimal, 1, region);
-
-            EndSingleTimeCommands(commandBuffer);
+            stCommand.EndSingleTimeCommands(commandBuffer);
         }
 
         private unsafe void LoadModel()
         {
-            using var assimp = Assimp.GetApi();
-            var scene = assimp.ImportFile("Asserts/viking_room/scene.gltf", (uint)PostProcessPreset.TargetRealTimeMaximumQuality);
-            var vertexMap = new Dictionary<Vertex, uint>();
-            var vertices = new List<Vertex>();
-            var indices = new List<uint>();
+            meshes = new Mesh[2];
+            var gltf1 = new GltfLoader("Asserts/viking_room/scene.gltf");
+            var gltf2 = new GltfLoader("Asserts/gaz-66/scene.gltf");
+            this.vertices = gltf1.verticesBuffer;
+            this.indices = gltf1.indicesBuffer;
+            meshes[0].firstIndex = 0;
+            meshes[0].instanceCount = (UInt32)gltf1.indicesBuffer.Length;
+            meshes[0].vertexOffset = 0;
 
-            VisitSceneNode(scene->MRootNode);
-            assimp.ReleaseImport(scene);
-
-            this.vertices = vertices.ToArray();
-            this.indices = indices.ToArray();
-
-            void VisitSceneNode(Node* node)
-            {
-                for (int m = 0; m < node->MNumMeshes; m++)
-                {
-                    var mesh = scene->MMeshes[node->MMeshes[m]];
-                    textureName = mesh->MName.AsString;
-
-                    for (int f = 0; f < mesh->MNumFaces; f++)
-                    {
-                        var face = mesh->MFaces[f];
-
-                        for (int i = 0; i < face.MNumIndices; i++)
-                        {
-                            uint index = face.MIndices[i];
-
-                            var position = mesh->MVertices[index];
-                            var texture = mesh->MTextureCoords[0][(int)index];
-
-                            Vertex vertex = new Vertex
-                            {
-                                pos = new Vector3D<float>(position.X, position.Y, position.Z),
-                                color = new Vector3D<float>(1, 1, 1),
-                                //Flip Y for OBJ in Vulkan
-                                texCoord = new Vector2D<float>(texture.X, 1.0f - texture.Y)
-                            };
-
-                            if (vertexMap.TryGetValue(vertex, out var meshIndex))
-                            {
-                                indices.Add(meshIndex);
-                            }
-                            else
-                            {
-                                indices.Add((uint)vertices.Count);
-                                vertexMap[vertex] = (uint)vertices.Count;
-                                vertices.Add(vertex);
-                            }
-                        }
-                    }
-                }
-
-                for (int c = 0; c < node->MNumChildren; c++)
-                {
-                    VisitSceneNode(node->MChildren[c]);
-                }
-            }
+            var filename1 = "Asserts/viking_room/textures/viking_room.png";
+            var filename2 = "Asserts/gaz-66/textures/material_baseColor.png";
+            CreateTextureImage(filename1, out meshes[0].texture, out meshes[0].textureMemory);
+            CreateTextureImage(filename2, out meshes[1].texture, out meshes[1].textureMemory);
         }
 
         private unsafe void CreateVertexBuffer()
         {
             ulong bufferSize = (ulong)GetArrayByteSize(vertices);
 
-            CreateBuffer(bufferSize, BufferUsageFlags.BufferUsageTransferSrcBit,
-                MemoryPropertyFlags.MemoryPropertyHostVisibleBit |
-                MemoryPropertyFlags.MemoryPropertyHostCoherentBit,
-                out var stagingBuffer, out var stagingBufferMemory);
-
-            // filling the vertex buffer
-            void* data = null;
-            vk.MapMemory(device, stagingBufferMemory, 0, bufferSize, 0, ref data);
-            fixed(Vertex* ptr = vertices)
-            {
-                Unsafe.CopyBlock(data, (void*)ptr, (uint)bufferSize);
-            }
-            vk.UnmapMemory(device, stagingBufferMemory);
-
             CreateBuffer(bufferSize,
                 BufferUsageFlags.BufferUsageTransferDstBit |
                 BufferUsageFlags.BufferUsageVertexBufferBit,
                 MemoryPropertyFlags.MemoryPropertyDeviceLocalBit,
                 out vertexBuffer, out vertexBufferMemory);
-
-            CopyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-
-            vk.DestroyBuffer(device, stagingBuffer, null);
-            vk.FreeMemory(device, stagingBufferMemory, null);
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            fixed(void* ptr = vertices)
+            {
+                staging.CopyDataToBuffer(stCommand, vertexBuffer, ptr, (uint)bufferSize);
+            }
         }
 
         private unsafe void CreateIndexBuffer()
         {
             ulong bufferSize = (ulong)GetArrayByteSize(indices);
 
-            CreateBuffer(bufferSize, BufferUsageFlags.BufferUsageTransferSrcBit,
-                MemoryPropertyFlags.MemoryPropertyHostVisibleBit |
-                MemoryPropertyFlags.MemoryPropertyHostCoherentBit,
-                out var stagingBuffer,
-                out var stagingBufferMemory);
-
-            void* data = null;
-            vk.MapMemory(device, stagingBufferMemory, 0, bufferSize, 0, ref data);
-            fixed(void* ptr = indices)
-            {
-                Unsafe.CopyBlock(data, ptr, (uint)bufferSize);
-            }
-            vk.UnmapMemory(device, stagingBufferMemory);
-
             CreateBuffer(bufferSize,
                 BufferUsageFlags.BufferUsageTransferDstBit |
                 BufferUsageFlags.BufferUsageIndexBufferBit,
                 MemoryPropertyFlags.MemoryPropertyDeviceLocalBit,
                 out indexBuffer, out indexBufferMemory);
-            CopyBuffer(stagingBuffer, indexBuffer, bufferSize);
-
-            vk.DestroyBuffer(device, stagingBuffer, null);
-            vk.FreeMemory(device, stagingBufferMemory, null);
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            fixed (void* ptr = indices)
+            {
+                staging.CopyDataToBuffer(stCommand, indexBuffer, ptr, (uint)bufferSize);
+            }
         }
 
         private unsafe void CreateUniformBuffers()
@@ -1476,7 +1384,7 @@ namespace MafrixEngine.GraphicsWrapper
         private unsafe void CreateDescriptorSets()
         {
             var layouts = new DescriptorSetLayout[MaxFrameInFlight];
-            for(var i = 0; i < MaxFrameInFlight; i++)
+            for (var i = 0; i < MaxFrameInFlight; i++)
             {
                 layouts[i] = descriptorSetLayout;
             }
@@ -1496,8 +1404,84 @@ namespace MafrixEngine.GraphicsWrapper
             var descriptorWrites = stackalloc WriteDescriptorSet[2];
             descriptorWrites[0].SType = StructureType.WriteDescriptorSet;
             descriptorWrites[1].SType = StructureType.WriteDescriptorSet;
-            //descriptorWrites[0] = new WriteDescriptorSet(StructureType.WriteDescriptorSet);
-            //descriptorWrites[1] = new WriteDescriptorSet(StructureType.WriteDescriptorSet);
+            for (var i = 0; i < MaxFrameInFlight / 2; i++)
+            {
+                var bufferInfo = new DescriptorBufferInfo();
+                bufferInfo.Buffer = uniformBuffers[2 * i];
+                bufferInfo.Offset = 0;
+                bufferInfo.Range = (ulong)Unsafe.SizeOf<UniformBufferObject>();
+
+                var imageInfo = new DescriptorImageInfo();
+                imageInfo.ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
+                imageInfo.ImageView = textureImageView;
+                imageInfo.Sampler = textureSampler;
+
+                descriptorWrites[0].DstSet = descriptorSets[2 * i];
+                descriptorWrites[0].DstBinding = 0;
+                descriptorWrites[0].DstArrayElement = 0;
+                descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
+                descriptorWrites[0].DescriptorCount = 1;
+                descriptorWrites[0].PBufferInfo = &bufferInfo;
+
+                descriptorWrites[1].DstSet = descriptorSets[2 * i];
+                descriptorWrites[1].DstBinding = 1;
+                descriptorWrites[1].DstArrayElement = 0;
+                descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
+                descriptorWrites[1].DescriptorCount = 1;
+                descriptorWrites[1].PImageInfo = &imageInfo;
+
+                vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
+
+                bufferInfo.Buffer = uniformBuffers[2 * i + 1];
+                bufferInfo.Offset = 0;
+                bufferInfo.Range = (ulong)Unsafe.SizeOf<UniformBufferObject>();
+
+                imageInfo = new DescriptorImageInfo();
+                imageInfo.ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
+                imageInfo.ImageView = texture2ImageView;
+                imageInfo.Sampler = textureSampler;
+
+                descriptorWrites[0].DstSet = descriptorSets[2 * i + 1];
+                descriptorWrites[0].DstBinding = 0;
+                descriptorWrites[0].DstArrayElement = 0;
+                descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
+                descriptorWrites[0].DescriptorCount = 1;
+                descriptorWrites[0].PBufferInfo = &bufferInfo;
+
+                descriptorWrites[1].DstSet = descriptorSets[2 * i + 1];
+                descriptorWrites[1].DstBinding = 1;
+                descriptorWrites[1].DstArrayElement = 0;
+                descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
+                descriptorWrites[1].DescriptorCount = 1;
+                descriptorWrites[1].PImageInfo = &imageInfo;
+
+                vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
+            }
+        }
+
+        private unsafe void CreateDescriptorSet()
+        {
+            var layouts = new DescriptorSetLayout[MaxFrameInFlight];
+            for (var i = 0; i < MaxFrameInFlight; i++)
+            {
+                layouts[i] = descriptorSetLayout;
+            }
+            var allocInfo = new DescriptorSetAllocateInfo(StructureType.DescriptorSetAllocateInfo);
+            allocInfo.DescriptorPool = descriptorPool;
+            allocInfo.DescriptorSetCount = MaxFrameInFlight;
+            fixed (DescriptorSetLayout* ptr = layouts)
+            {
+                allocInfo.PSetLayouts = ptr;
+                descriptorSets = new DescriptorSet[MaxFrameInFlight];
+                if (vk.AllocateDescriptorSets(device, &allocInfo, descriptorSets) != Result.Success)
+                {
+                    throw new Exception("failed to allocate descriptor sets.");
+                }
+            }
+
+            var descriptorWrites = stackalloc WriteDescriptorSet[2];
+            descriptorWrites[0].SType = StructureType.WriteDescriptorSet;
+            descriptorWrites[1].SType = StructureType.WriteDescriptorSet;
             for (var i = 0; i < MaxFrameInFlight; i++)
             {
                 var bufferInfo = new DescriptorBufferInfo();
@@ -1526,45 +1510,6 @@ namespace MafrixEngine.GraphicsWrapper
 
                 vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
             }
-        }
-
-        private unsafe void BeginSingleTimeCommands(out CommandBuffer commandBuffer)
-        {
-            var allocInfo = new CommandBufferAllocateInfo(StructureType.CommandBufferAllocateInfo);
-            allocInfo.Level = CommandBufferLevel.Primary;
-            allocInfo.CommandPool = commandPool;
-            allocInfo.CommandBufferCount = 1;
-
-            commandBuffer = new CommandBuffer();
-            if (vk.AllocateCommandBuffers(device, allocInfo, out commandBuffer) != Result.Success)
-            {
-                throw new Exception("failed to create \"CopoyBuffer\"'s CommandBuffer.");
-            }
-
-            var beginInfo = new CommandBufferBeginInfo(StructureType.CommandBufferBeginInfo);
-            beginInfo.Flags = CommandBufferUsageFlags.CommandBufferUsageOneTimeSubmitBit;
-            vk.BeginCommandBuffer(commandBuffer, beginInfo);
-        }
-
-        private unsafe void EndSingleTimeCommands(CommandBuffer commandBuffer)
-        {
-            vk.EndCommandBuffer(commandBuffer);
-
-            var submitInfo = new SubmitInfo(StructureType.SubmitInfo);
-            submitInfo.CommandBufferCount = 1;
-            submitInfo.PCommandBuffers = &commandBuffer;
-            vk.QueueSubmit(graphicsQueue, 1, submitInfo, default);
-            vk.QueueWaitIdle(graphicsQueue);
-
-            vk.FreeCommandBuffers(device, commandPool, 1, commandBuffer);
-        }
-
-        private unsafe void CopyBuffer(Buffer srcBuffer, Buffer dstBuffer, ulong size)
-        {
-            BeginSingleTimeCommands(out var commandBuffer);
-            var copyRegion = new BufferCopy(0, 0, size);
-            vk.CmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, copyRegion);
-            EndSingleTimeCommands(commandBuffer);
         }
 
         private unsafe UInt32 FindMemoryType(UInt32 typeFilter, MemoryPropertyFlags properties)
@@ -1789,6 +1734,17 @@ namespace MafrixEngine.GraphicsWrapper
             vk.FreeMemory(device, vertexBufferMemory, null);
             vk.DestroyBuffer(device, indexBuffer, null);
             vk.FreeMemory(device, indexBufferMemory, null);
+
+            vk.DestroyImage(device, texture2Image, null);
+            vk.DestroyImageView(device, texture2ImageView, null);
+            vk.FreeMemory(device, texture2ImageMemory, null);
+            foreach(var mesh in meshes)
+            {
+                vk.DestroyImage(device, mesh.texture, null);
+                vk.FreeMemory(device, mesh.textureMemory, null);
+                mesh.Dispose();
+            }
+
             vk.DestroyDescriptorPool(device, descriptorPool, null);
             vk.DestroyDescriptorSetLayout(device, descriptorSetLayout, null);
             vk.DestroyPipeline(device, graphicsPipeline, null);
@@ -1799,6 +1755,9 @@ namespace MafrixEngine.GraphicsWrapper
                 vk.DestroyImageView(device, imageView, null);
             }
             khrSwapchain.DestroySwapchain(device, swapchain, null);
+
+            staging.Dispose();
+
             vk.DestroyDevice(device, null);
             if(EnableValidationLayers)
             {

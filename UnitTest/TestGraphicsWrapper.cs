@@ -61,18 +61,5 @@ namespace UnitTest
                 block = block.Slice(memory.Length);
             }
         }
-
-        [Fact]
-        public unsafe void TestGltfLoader()
-        {
-            using var assimp = Assimp.GetApi();
-            var scene = assimp.ImportFile("Asserts/viking_room/scene.gltf", (uint)PostProcessPreset.TargetRealTimeMaximumQuality);
-
-            Assert.NotNull(scene->ToString());
-            Assert.Equal(1, (int)scene->MNumMeshes);
-            Assert.Equal(1, (int)scene->MNumMaterials);
-            Assert.NotEqual(0u, (uint)scene->MMeshes);
-            Assert.NotEqual(0u, (uint)scene->MMaterials);
-        }
     }
 }

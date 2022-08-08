@@ -7,6 +7,7 @@ using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Maths;
 using Silk.NET.Vulkan;
+using Silk.NET.Assimp;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using SixLabors.ImageSharp;
@@ -14,8 +15,6 @@ using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using glTFLoader;
-using glTFLoader.Schema;
 using Image = SixLabors.ImageSharp.Image;
 
 namespace MafrixEngine.ModelLoaders
@@ -59,16 +58,107 @@ namespace MafrixEngine.ModelLoaders
             return attributeDescriptions;
         }
     }
+
+    public class GltfTexture
+    {
+
+    }
+
+    public class GltfMaterial
+    {
+        public unsafe void LoadMaterial(Material* material)
+        {
+            for(var i = 0; i < material->MNumProperties; i++)
+            {
+                var property = material->MProperties[i];
+                //property->
+            }
+        }
+    }
+
+    public class GltfMesh
+    {
+        public Vertex[] vertices;
+        public uint[] indices;
+        public GltfMaterial material;
+        public unsafe void LoadMesh(Mesh* mesh, GltfMaterial[] materials)
+        {
+            var vertexMap = new Dictionary<Vertex, uint>();
+            var vertices = new List<Vertex>();
+            var indices = new List<uint>();
+
+            var texIdx = mesh->MMaterialIndex;
+
+            for (var i = 0; i < mesh->MNumFaces; i++)
+            {
+                var face = mesh->MFaces[i];
+                for(var j = 0; j < face.MNumIndices; j++)
+                {
+                    var index = face.MIndices[j];
+                    var position = mesh->MVertices[index];
+                    var normal = mesh->MNormals[index];
+                    var texture = mesh->MTextureCoords[(int)texIdx][index];
+
+                    var vertex = new Vertex
+                    {
+                        pos = new Vec3(position.X, position.Y, position.Z),
+                        color = new Vec3(normal.X, normal.Y, normal.Z),
+                        //Flip Y for OBJ in Vulkan
+                        texCoord = new Vec2(texture.X, 1.0f - texture.Y)
+                    };
+                    if (vertexMap.TryGetValue(vertex, out var meshIndex))
+                    {
+                        indices.Add(meshIndex);
+                    }
+                    else
+                    {
+                        indices.Add((uint)vertices.Count);
+                        vertexMap[vertex] = (uint)vertices.Count;
+                        vertices.Add(vertex);
+                    }
+                }
+            }
+
+            this.vertices = vertices.ToArray();
+            this.indices = indices.ToArray();
+            material = materials[texIdx];
+        }
+    }
+
     public class GltfNode
     {
-        public Matrix4X4<float>? matrix;
+        public System.Numerics.Matrix4x4 matrix;
         // must be converted to matrices and
         //   postmultiplied in the T*R*S order
         //   which is first the scale, then the rotation,
         //      and then the translation
-        public Vector3D<float>? translation;
-        public Quaternion<float>? rotation;
-        public Vector3D<float>? scale;
+        //public Vector3D<float>? translation;
+        //public Quaternion<float>? rotation;
+        //public Vector3D<float>? scale;
+
+        public GltfMesh[] meshes;
+        public GltfNode[] childs;
+
+        public unsafe void LoadNode(Node* node, GltfMesh[] meshes)
+        {
+            var meshNum = node->MNumMeshes;
+            var childNum = node->MNumChildren;
+            this.meshes = new GltfMesh[meshNum];
+            this.childs = new GltfNode[childNum];
+            for(var m = 0; m < meshNum; m++)
+            {
+                var idx = node->MMeshes[m];
+                this.meshes[m] = meshes[idx];
+            }
+            for(var i = 0; i < childNum; i++)
+            {
+                this.childs[i] = new GltfNode();
+                var cNode = node->MChildren[i];
+                this.childs[i].LoadNode(cNode, meshes);
+            }
+
+            matrix = node->MTransformation;            
+        }
     }
 
     public class GltfBuffer
@@ -92,143 +182,95 @@ namespace MafrixEngine.ModelLoaders
         public int target;
     }
 
-    public class GltfMesh
+    public class GltfModel
     {
         public Vertex[] verticesBuffer;
         public uint[] indicesBuffer;
         public Image texture;
+        public GltfNode[] nodes;
+        public Texture[] textures;
+
+        public unsafe void LoadNode(List<Node> totalNodes, Node* parent)
+        {
+
+        }
     }
 
     public class GltfLoader //: IDisposable
     {
         public Vertex[] verticesBuffer;
         public uint[] indicesBuffer;
+        public GltfNode rootNode;
+        public Image image;
 
         public unsafe GltfLoader(string filename)
         {
             var path = Directory.GetCurrentDirectory();
             var name = Path.Combine(path, filename);
-            var gltf = Interface.LoadModel(name);
-
+            using var assimp = Assimp.GetApi();
+            var gltf = assimp.ImportFile(name, (uint)PostProcessPreset.TargetRealTimeMaximumQuality);
+            
             var vertexMap = new Dictionary<Vertex, uint>();
             var vertices = new List<Vertex>();
             var indices = new List<uint>();
-            
-            var mesh = gltf.Meshes[0];
-            var accessors = gltf.Accessors;
-            BufferView[] bufferViews = gltf.BufferViews;
-            var buffers = gltf.Buffers;
-            byte[][] bytesBuffers = new byte[buffers.Length][];
-            for(var j = 0; j < buffers.Length; j++)
+
+            //var imageName = gltf->MTextures[0]->MFilename.AsString;
+            //image = Image.Load(Path.Combine(path, imageName));
+
+            var materials = new GltfMaterial[gltf->MNumMaterials];
+            for(var i = 0; i < gltf->MNumMaterials; i++)
             {
-                byte[] buffer = gltf.LoadBinaryBuffer(j, name);
-                bytesBuffers[j] = buffer;
-            }
-            //mesh
-            //mesh[] ->
-            //    primitives[] ->
-            //      Attributes {string, int}[] (NORMAL,POSITION,TEXCOORD_n)
-            //      indices int
-            //      material int
-            //      mode int|enum
-            //Accessors[] ->
-            //    BufferView int (index of view)
-            //    Byteoffset int
-            //    Count int
-            //BufferViews[] ->
-            //    Buffer int (index of buffer)
-            //    ByteLength int
-            //    ByteOffset int
-            //Buffer[]
-            //    ByteLength int
-            //    Uri string
-            for (var i = 0; i < mesh.Primitives.Length; i++)
-            {
-                int idx = mesh.Primitives[i].Indices!.Value;
-                var primAccessor = accessors[idx];
-                var primBufferView = bufferViews[primAccessor.BufferView!.Value];
-                var primBuffer = buffers[primBufferView.Buffer];
-                var primOffset = primAccessor.ByteOffset + primBufferView.ByteOffset;
-
-                Accessor? normalAccessor = null;
-                BufferView? normalBufferView = null;
-                int normalBufferIdx = 0;
-                Accessor? texCoordsAccessor = null;
-                BufferView? texCoordsBufferView = null;
-                int texCoordsBufferIdx = 0;
-                Accessor? positionAcccessor = null;
-                BufferView? positionBufferView = null;
-                int positionBufferIdx = 0;
-                foreach (var attr in mesh.Primitives[i].Attributes)
-                {
-                    if(attr.Key == "NORMAL")
-                    {
-                        normalAccessor = accessors[attr.Value];
-                        normalBufferView = bufferViews[normalAccessor.BufferView!.Value];
-                        normalBufferIdx = normalBufferView.Buffer;
-                    } else if(attr.Key == "POSITION")
-                    {
-                        positionAcccessor = accessors[attr.Value];
-                        positionBufferView = bufferViews[positionAcccessor.BufferView!.Value];
-                        positionBufferIdx = positionBufferView.Buffer;
-                    } else if(attr.Key == "TEXCOORD_0")
-                    {
-                        texCoordsAccessor = accessors[attr.Value];
-                        texCoordsBufferView = bufferViews[texCoordsAccessor.BufferView!.Value];
-                        texCoordsBufferIdx = texCoordsBufferView.Buffer;
-                    }
-                }
-
-                Vec3 position;
-                int posOffset = positionAcccessor!.ByteOffset + positionBufferView!.ByteOffset;
-                Vec3 normal;
-                int normalOffset = normalAccessor!.ByteOffset + normalBufferView!.ByteOffset;
-                Vec2 texCoord;
-                int texCoordOffset = texCoordsAccessor!.ByteOffset + texCoordsBufferView!.ByteOffset;
-
-                byte[] buffer = bytesBuffers[primBufferView.Buffer];
-                if(!(positionBufferIdx == normalBufferIdx && normalBufferIdx == texCoordsBufferIdx))
-                {
-                    throw new Exception("Bug: gltf buffer index not equal.");
-                }
-
-                fixed (byte* p = &buffer[primOffset])
-                {
-                    uint* iPtr = (uint*)p;
-                    float* ptr = (float*)(p + posOffset);
-                    Vec3* pPtr = (Vec3*)ptr;
-                    ptr = (float*)(p + normalOffset);
-                    Vec3* nPtr = (Vec3*)ptr;
-                    ptr = (float*)(p + texCoordOffset);
-                    Vec2* tPtr = (Vec2*)ptr;
-
-                    for (var j = 0; j < primAccessor.Count; j++)
-                    {
-                        uint primIdx = iPtr[j];
-                        position = pPtr[primIdx];
-                        normal = nPtr[primIdx];
-                        texCoord = tPtr[primIdx];
-                        //texCoord = new Vec2(texCoord.X, 1.0f - texCoord.Y);
-                        
-                        var vertex = new Vertex(position, normal, texCoord);
-                        if (vertexMap.TryGetValue(vertex, out var meshIndex))
-                        {
-                            indices.Add(meshIndex);
-                        }
-                        else
-                        {
-                            indices.Add((uint)vertices.Count);
-                            vertexMap[vertex] = (uint)vertices.Count;
-                            vertices.Add(vertex);
-                        }
-                    }
-                }
+                materials[i] = new GltfMaterial();
+                materials[i].LoadMaterial(gltf->MMaterials[i]);
             }
 
-            verticesBuffer = vertices.ToArray();
-            indicesBuffer = indices.ToArray();
+            var meshes = new GltfMesh[gltf->MNumMeshes];
+            var verticesCount = 0;
+            var indicesCount = 0;
+            for(var i = 0; i < gltf->MNumMeshes; i++)
+            {
+                meshes[i] = new GltfMesh();
+                meshes[i].LoadMesh(gltf->MMeshes[i], materials);
+                verticesCount += meshes[i].vertices.Length;
+                indicesCount += meshes[i].indices.Length;
+            }
+
+            rootNode = new GltfNode();
+            rootNode.LoadNode(gltf->MRootNode, meshes);
+
+            var verticesOffset = 0;
+            var indicesOffset = 0;
+            verticesBuffer = new Vertex[verticesCount];
+            indicesBuffer = new uint[indicesCount];
+            var vertexTarg = new Memory<Vertex>(verticesBuffer);
+            var indexTarg = new Memory<uint>(indicesBuffer);
+            foreach(var mesh in meshes)
+            {
+                vertexTarg.Slice(verticesOffset, mesh.vertices.Length);
+                var src = new Memory<Vertex>(mesh.vertices);
+                src.CopyTo(vertexTarg);
+
+                indexTarg.Slice(indicesOffset, mesh.indices.Length);
+                var indexSrc = new Memory<uint>(mesh.indices);
+                indexSrc.CopyTo(indexTarg);
+            }
+            //verticesBuffer = meshes[0].vertices;
+            //indicesBuffer = meshes[0].indices;
         }
 
-
+        public Mat4 GetMatrix()
+        {
+            var mat = System.Numerics.Matrix4x4.Identity;
+            for(var n = rootNode; n != null; n = n.childs[0])
+            {
+                mat = mat * n.matrix;
+            }
+            return new Mat4(
+                mat.M11, mat.M12, mat.M13, mat.M14,
+                mat.M21, mat.M22, mat.M23, mat.M24,
+                mat.M31, mat.M32, mat.M33, mat.M34,
+                mat.M41, mat.M42, mat.M43, mat.M44
+                );
+        }
     }
 }

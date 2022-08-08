@@ -83,7 +83,7 @@ namespace MafrixEngine.GraphicsWrapper
             region.BufferOffset = 0;
             region.BufferRowLength = 0;
             region.BufferImageHeight = 0;
-            region.ImageSubresource.AspectMask = ImageAspectFlags.ImageAspectColorBit;
+            region.ImageSubresource.AspectMask = ImageAspectFlags.ColorBit;
             region.ImageSubresource.MipLevel = 0;
             region.ImageSubresource.BaseArrayLayer = 0;
             region.ImageSubresource.LayerCount = 1;
@@ -115,8 +115,8 @@ namespace MafrixEngine.GraphicsWrapper
             }
             var createInfo = new BufferCreateInfo(StructureType.BufferCreateInfo);
             createInfo.Size = size;
-            createInfo.Usage = BufferUsageFlags.BufferUsageTransferDstBit |
-                BufferUsageFlags.BufferUsageTransferSrcBit;
+            createInfo.Usage = BufferUsageFlags.TransferDstBit |
+                BufferUsageFlags.TransferSrcBit;
             createInfo.SharingMode = SharingMode.Exclusive;
             if(vk.CreateBuffer(device, createInfo, null, out buffer) != Result.Success)
             {
@@ -129,8 +129,8 @@ namespace MafrixEngine.GraphicsWrapper
             memAllocInfo.AllocationSize = memoryRequirements.Size;
             memAllocInfo.MemoryTypeIndex =
                 FindMemoryType(memoryRequirements.MemoryTypeBits,
-                    MemoryPropertyFlags.MemoryPropertyHostVisibleBit |
-                    MemoryPropertyFlags.MemoryPropertyHostCoherentBit);
+                    MemoryPropertyFlags.HostVisibleBit |
+                    MemoryPropertyFlags.HostCoherentBit);
             vk.AllocateMemory(device, memAllocInfo, null, out deviceMemory);
 
             vk.BindBufferMemory(device, buffer, deviceMemory, 0);

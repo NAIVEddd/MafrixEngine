@@ -45,7 +45,7 @@ namespace MafrixEngine.GraphicsWrapper
             }
 
             var beginInfo = new CommandBufferBeginInfo(StructureType.CommandBufferBeginInfo);
-            beginInfo.Flags = CommandBufferUsageFlags.CommandBufferUsageOneTimeSubmitBit;
+            beginInfo.Flags = CommandBufferUsageFlags.OneTimeSubmitBit;
             vk.BeginCommandBuffer(commandBuffer, beginInfo);
         }
 

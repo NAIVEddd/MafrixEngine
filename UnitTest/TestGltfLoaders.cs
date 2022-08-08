@@ -91,6 +91,14 @@ namespace UnitTest
             }
         }
 
+        [Fact]
+        public unsafe void TestGltfLoader2()
+        {
+            using var assimp = Assimp.GetApi();
+            var scene = assimp.ImportFile("Asserts/viking_room/scene.gltf", (uint)PostProcessPreset.TargetRealTimeMaximumQuality);
+            Assert.NotEqual(0, (int)scene->MRootNode);
+        }
+
         private string gltfName = @"Asserts/viking_room/scene.gltf";
         [Fact]
         public unsafe void TestGltf2Loader()

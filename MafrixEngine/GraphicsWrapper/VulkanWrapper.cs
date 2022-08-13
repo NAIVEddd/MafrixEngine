@@ -30,13 +30,7 @@ namespace MafrixEngine.GraphicsWrapper
     using Mat4 = Matrix4X4<float>;
     
 
-    public struct UniformBufferObject
-    {
-        public Mat4 model;
-        public Mat4 view;
-        public Mat4 proj;
-        public UniformBufferObject(Mat4 m, Mat4 v, Mat4 p) => (model, view, proj) = (m, v, p);
-    }
+    
 
     public struct Mesh : IDisposable
     {
@@ -58,6 +52,16 @@ namespace MafrixEngine.GraphicsWrapper
         public DeviceMemory vertexBufferMemory;
         public Buffer indicesBuffer;
         public DeviceMemory indiceBufferMemory;
+        public DescriptorPool descriptorPool;
+        public DescriptorSet[] descriptorSets;
+        public Mat4 matrix;
+        public float frameRotate;
+        public GltfLoader gltf;
+
+        public void BindCommand(Vk vk, CommandBuffer commandBuffer, Action<int> action)
+        {
+            gltf.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
+        }
 
         public void Dispose()
         {
@@ -85,25 +89,13 @@ namespace MafrixEngine.GraphicsWrapper
 
         public Mesh[] meshes;
 
-        //public Buffer[] uniformBuffers;
-        //public DeviceMemory[] uniformBuffersMemory;
         public string textureName;
         public UInt32 mipLevels;
-        //public Image textureImage;
-        //public DeviceMemory textureImageMemory;
-        //public ImageView textureImageView;
-        //public Image texture2Image;
-        //public DeviceMemory texture2ImageMemory;
-        //public ImageView texture2ImageView;
 
         public Image depthImage;
         public DeviceMemory depthImageMemory;
         public ImageView depthImageView;
         public Sampler textureSampler;
-        public DescriptorPool descriptorPool;
-        public DescriptorSet[] descriptorSets;
-        public DescriptorPool descriptor2Pool;
-        public DescriptorSet[] descriptor2Sets;
         public CommandPool commandPool;
         public CommandBuffer[] commandBuffers;
         public Semaphore[] imageAvailableSemaphores;
@@ -148,8 +140,6 @@ namespace MafrixEngine.GraphicsWrapper
         {
             return Marshal.SizeOf<T>() * array.Length;
         }
-        //public Vertex[] vertices;
-        public UInt32[] indices;
 
         public VulkanWrapper()
         {
@@ -310,28 +300,30 @@ namespace MafrixEngine.GraphicsWrapper
         {
             var time = (float)(DateTime.Now - startTime).TotalSeconds;
 
-            //var model = Mat4.Identity;
-            var model = Matrix4X4.CreateRotationY<float>(Scalar.DegreesToRadians<float>(time * 90.0f));
-            //var model = Matrix4X4.CreateRotationY<float>(Scalar.DegreesToRadians<float>(time * 90.0f)) * Matrix4X4.CreateScale<float>(0.015f);
             var view = Matrix4X4.CreateLookAt<float>(new Vec3(35.0f, 35.0f, 35.0f), new Vec3(0.0f), new Vec3(0.0f, -1.0f, 0.0f));
             var proj = Matrix4X4.CreatePerspectiveFieldOfView<float>(Scalar.DegreesToRadians<float>(45.0f),
                 (float)swapchainExtent.Width / (float)swapchainExtent.Height, 0.1f, 100.0f);
             proj.M11 *= -1.0f;
-            var ubo = new UniformBufferObject(model, view, proj);
 
-            void* data = null;
-            ulong datasize = (ulong)Unsafe.SizeOf<UniformBufferObject>();
-
-            vk.MapMemory(device, meshes[0].uniformMemory[index], 0, datasize, 0, ref data);
-            Unsafe.CopyBlock(data, &ubo, (uint)datasize);
-            vk.UnmapMemory(device, meshes[0].uniformMemory[index]);
-
-            var modelScaled = model * Matrix4X4.CreateRotationX<float>(Scalar.DegreesToRadians<float>(time * 25.0f)) *
-                                Matrix4X4.CreateScale<float>(0.03f);
-            ubo = new UniformBufferObject(modelScaled, view, proj);
-            vk.MapMemory(device, meshes[1].uniformMemory[index], 0, datasize, 0, ref data);
-            Unsafe.CopyBlock(data, &ubo, (uint)datasize);
-            vk.UnmapMemory(device, meshes[1].uniformMemory[index]);
+            var uboptr = stackalloc UniformBufferObject[1];
+            uboptr->proj = proj;
+            uboptr->view = view;
+            foreach(var mesh in meshes)
+            {
+                var offset = index * mesh.gltf.descriptorSetCount * sizeof(UniformBufferObject);
+                mesh.gltf.UpdateUniformBuffer(out var modelMatrices);
+                void* data = null;
+                ulong datasize = (ulong)(Unsafe.SizeOf<UniformBufferObject>());
+                var model = Matrix4X4.CreateRotationY<float>(time * mesh.frameRotate);
+                for(var i = 0; i < modelMatrices.Length; i++)
+                {
+                    uboptr->model = modelMatrices[i] * mesh.matrix * model;
+                    var idx = index * mesh.gltf.descriptorSetCount + i;
+                    vk.MapMemory(device, mesh.uniformMemory[idx], 0, datasize, 0, ref data);
+                    Unsafe.CopyBlock(data, uboptr, (uint)datasize);
+                    vk.UnmapMemory(device, mesh.uniformMemory[idx]);
+                }
+            }
         }
 
         private unsafe string[]? GetOptimalValidationLayers()
@@ -372,7 +364,6 @@ namespace MafrixEngine.GraphicsWrapper
             appInfo.SType = StructureType.ApplicationInfo;
             MarshalAssignString(out appInfo.PApplicationName, "First Vulkan Application");
             appInfo.ApplicationVersion = new Version32(0, 0, 1);
-            //appInfo.PEngineName = (byte*)SilkMarshal.StringToPtr("Mafrix Engine");
             MarshalAssignString(out appInfo.PEngineName, "Mafrix Engine");
             appInfo.EngineVersion = new Version32(0, 0, 1);
             appInfo.ApiVersion = Vk.Version11;
@@ -1316,6 +1307,7 @@ namespace MafrixEngine.GraphicsWrapper
                 meshes[i].vertexOffset = 0;
                 meshes[i].vertices = gltf.verticesBuffer;
                 meshes[i].indices = gltf.indicesBuffer;
+                meshes[i].gltf = gltf;
             }
 
             var totalSize = 0;
@@ -1323,21 +1315,10 @@ namespace MafrixEngine.GraphicsWrapper
             {
                 totalSize += mesh.indices.Length;
             }
-
-            // copy all indices into one buffer
-            indices = new UInt32[totalSize];
-            var offset = 0;
-            for(var i = 0; i < meshes.Length; i++)
-            {
-                var mesh = meshes[i];
-                //mesh.firstIndex = (uint)offset;
-                var len = mesh.indices.Length;
-                mesh.instanceCount = (uint)len;
-                var targ = new Memory<UInt32>(indices, offset, len);
-                var src = new Memory<UInt32>(mesh.indices);
-                src.CopyTo(targ);
-                offset += len;
-            }
+            meshes[0].matrix = Matrix4X4.CreateTranslation<float>(new Vec3(-40, 0, 0));
+            meshes[0].frameRotate = Scalar.DegreesToRadians<float>(90.0f);
+            meshes[1].matrix = Matrix4X4.CreateScale<float>(0.03f);
+            meshes[1].frameRotate = Scalar.DegreesToRadians<float>(77.0f);
 
             var files = new string[]
             {
@@ -1357,27 +1338,40 @@ namespace MafrixEngine.GraphicsWrapper
 
             var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
 
-            bufferSize = (ulong)GetArrayByteSize(meshes[0].vertices);
-            CreateBuffer(bufferSize,
-                BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.VertexBufferBit,
-                MemoryPropertyFlags.DeviceLocalBit,
-                out meshes[0].vertexBuffer, out meshes[0].vertexBufferMemory);
-            fixed (void* ptr = meshes[0].vertices)
+            for(var m = 0; m < meshes.Length; m++)
             {
-                staging.CopyDataToBuffer(stCommand, meshes[0].vertexBuffer, ptr, (uint)bufferSize);
+                bufferSize = (ulong)GetArrayByteSize(meshes[m].vertices);
+                CreateBuffer(bufferSize,
+                    BufferUsageFlags.TransferDstBit |
+                    BufferUsageFlags.VertexBufferBit,
+                    MemoryPropertyFlags.DeviceLocalBit,
+                    out meshes[m].vertexBuffer, out meshes[m].vertexBufferMemory);
+                fixed (void* ptr = meshes[m].vertices)
+                {
+                    staging.CopyDataToBuffer(stCommand, meshes[m].vertexBuffer, ptr, (uint)bufferSize);
+                }
             }
+            //bufferSize = (ulong)GetArrayByteSize(meshes[0].vertices);
+            //CreateBuffer(bufferSize,
+            //    BufferUsageFlags.TransferDstBit |
+            //    BufferUsageFlags.VertexBufferBit,
+            //    MemoryPropertyFlags.DeviceLocalBit,
+            //    out meshes[0].vertexBuffer, out meshes[0].vertexBufferMemory);
+            //fixed (void* ptr = meshes[0].vertices)
+            //{
+            //    staging.CopyDataToBuffer(stCommand, meshes[0].vertexBuffer, ptr, (uint)bufferSize);
+            //}
 
-            bufferSize = (ulong)GetArrayByteSize(meshes[1].vertices);
-            CreateBuffer(bufferSize,
-                BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.VertexBufferBit,
-                MemoryPropertyFlags.DeviceLocalBit,
-                out meshes[1].vertexBuffer, out meshes[1].vertexBufferMemory);
-            fixed (void* ptr = meshes[1].vertices)
-            {
-                staging.CopyDataToBuffer(stCommand, meshes[1].vertexBuffer, ptr, (uint)bufferSize);
-            }
+            //bufferSize = (ulong)GetArrayByteSize(meshes[1].vertices);
+            //CreateBuffer(bufferSize,
+            //    BufferUsageFlags.TransferDstBit |
+            //    BufferUsageFlags.VertexBufferBit,
+            //    MemoryPropertyFlags.DeviceLocalBit,
+            //    out meshes[1].vertexBuffer, out meshes[1].vertexBufferMemory);
+            //fixed (void* ptr = meshes[1].vertices)
+            //{
+            //    staging.CopyDataToBuffer(stCommand, meshes[1].vertexBuffer, ptr, (uint)bufferSize);
+            //}
         }
 
         private unsafe void CreateIndexBuffer()
@@ -1386,38 +1380,52 @@ namespace MafrixEngine.GraphicsWrapper
 
             var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
 
-            bufferSize = (ulong)GetArrayByteSize(meshes[0].indices);
-            CreateBuffer(bufferSize,
-                BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.IndexBufferBit,
-                MemoryPropertyFlags.DeviceLocalBit,
-                out meshes[0].indicesBuffer, out meshes[0].indiceBufferMemory);
-            fixed (void* ptr = meshes[0].indices)
+            for(var m = 0; m < meshes.Length; m++)
             {
-                staging.CopyDataToBuffer(stCommand, meshes[0].indicesBuffer, ptr, (uint)bufferSize);
+                bufferSize = (ulong)GetArrayByteSize(meshes[m].indices);
+                CreateBuffer(bufferSize,
+                    BufferUsageFlags.TransferDstBit |
+                    BufferUsageFlags.IndexBufferBit,
+                    MemoryPropertyFlags.DeviceLocalBit,
+                    out meshes[m].indicesBuffer, out meshes[m].indiceBufferMemory);
+                fixed (void* ptr = meshes[m].indices)
+                {
+                    staging.CopyDataToBuffer(stCommand, meshes[m].indicesBuffer, ptr, (uint)bufferSize);
+                }
             }
+            //bufferSize = (ulong)GetArrayByteSize(meshes[0].indices);
+            //CreateBuffer(bufferSize,
+            //    BufferUsageFlags.TransferDstBit |
+            //    BufferUsageFlags.IndexBufferBit,
+            //    MemoryPropertyFlags.DeviceLocalBit,
+            //    out meshes[0].indicesBuffer, out meshes[0].indiceBufferMemory);
+            //fixed (void* ptr = meshes[0].indices)
+            //{
+            //    staging.CopyDataToBuffer(stCommand, meshes[0].indicesBuffer, ptr, (uint)bufferSize);
+            //}
 
-            bufferSize = (ulong)GetArrayByteSize(meshes[1].indices);
-            CreateBuffer(bufferSize,
-                BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.IndexBufferBit,
-                MemoryPropertyFlags.DeviceLocalBit,
-                out meshes[1].indicesBuffer, out meshes[1].indiceBufferMemory);
-            fixed (void* ptr = meshes[1].indices)
-            {
-                staging.CopyDataToBuffer(stCommand, meshes[1].indicesBuffer, ptr, (uint)bufferSize);
-            }
+            //bufferSize = (ulong)GetArrayByteSize(meshes[1].indices);
+            //CreateBuffer(bufferSize,
+            //    BufferUsageFlags.TransferDstBit |
+            //    BufferUsageFlags.IndexBufferBit,
+            //    MemoryPropertyFlags.DeviceLocalBit,
+            //    out meshes[1].indicesBuffer, out meshes[1].indiceBufferMemory);
+            //fixed (void* ptr = meshes[1].indices)
+            //{
+            //    staging.CopyDataToBuffer(stCommand, meshes[1].indicesBuffer, ptr, (uint)bufferSize);
+            //}
         }
 
         private unsafe void CreateUniformBuffers()
         {
-            ulong bufferSize = (ulong) Unsafe.SizeOf<UniformBufferObject>();
             
             for(var m = 0; m < meshes.Length; m++)
             {
-                meshes[m].uniformBuffer = new Buffer[MaxFrameInFlight];
-                meshes[m].uniformMemory = new DeviceMemory[MaxFrameInFlight];
-                for (int i = 0; i < MaxFrameInFlight; i++)
+                var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
+                ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].gltf.descriptorSetCount);
+                meshes[m].uniformBuffer = new Buffer[setCount];
+                meshes[m].uniformMemory = new DeviceMemory[setCount];
+                for (int i = 0; i < setCount; i++)
                 {
                     CreateBuffer(bufferSize, BufferUsageFlags.UniformBufferBit,
                         MemoryPropertyFlags.HostVisibleBit |
@@ -1435,104 +1443,79 @@ namespace MafrixEngine.GraphicsWrapper
             var poolInfo = new DescriptorPoolCreateInfo(StructureType.DescriptorPoolCreateInfo);
             poolInfo.PoolSizeCount = 2;
             poolInfo.PPoolSizes = poolSize;
-            poolInfo.MaxSets = MaxFrameInFlight;
 
-            if(vk.CreateDescriptorPool(device, poolInfo, null, out descriptorPool) != Result.Success)
+            for(var m = 0; m < meshes.Length; m++)
             {
-                throw new Exception("failed to create descriptor pool.");
-            }
-            if(vk.CreateDescriptorPool(device, poolInfo, null, out descriptor2Pool) != Result.Success)
-            {
-                throw new Exception("failed to create descriptor pool2.");
+                poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].gltf.descriptorSetCount);
+                if (vk.CreateDescriptorPool(device, poolInfo, null, out meshes[m].descriptorPool) != Result.Success)
+                {
+                    throw new Exception("failed to create descriptor pool.");
+                }
             }
         }
 
         private unsafe void CreateDescriptorSets()
         {
-            var layouts = new DescriptorSetLayout[MaxFrameInFlight];
-            for (var i = 0; i < MaxFrameInFlight; i++)
-            {
-                layouts[i] = descriptorSetLayout;
-            }
-            var allocInfo = new DescriptorSetAllocateInfo(StructureType.DescriptorSetAllocateInfo);
-            allocInfo.DescriptorPool = descriptorPool;
-            allocInfo.DescriptorSetCount = MaxFrameInFlight;
-            fixed(DescriptorSetLayout* ptr = layouts)
-            {
-                allocInfo.PSetLayouts = ptr;
-                descriptorSets = new DescriptorSet[MaxFrameInFlight];
-                if (vk.AllocateDescriptorSets(device, &allocInfo, descriptorSets) != Result.Success)
-                {
-                    throw new Exception("failed to allocate descriptor sets.");
-                }
-
-                allocInfo.DescriptorPool = descriptor2Pool;
-                descriptor2Sets = new DescriptorSet[MaxFrameInFlight];
-                if(vk.AllocateDescriptorSets(device, &allocInfo, descriptor2Sets) != Result.Success)
-                {
-                    throw new Exception("failed to allocate descriptor sets2.");
-                }
-            }
+            
 
             var descriptorWrites = stackalloc WriteDescriptorSet[2];
-            descriptorWrites[0].SType = StructureType.WriteDescriptorSet;
-            descriptorWrites[1].SType = StructureType.WriteDescriptorSet;
-            for (var i = 0; i < MaxFrameInFlight; i++)
+            for(var m = 0; m < meshes.Length; m++)
             {
-                var bufferInfo = new DescriptorBufferInfo();
-                bufferInfo.Buffer = meshes[0].uniformBuffer[i];
-                bufferInfo.Offset = 0;
-                bufferInfo.Range = (ulong)Unsafe.SizeOf<UniformBufferObject>();
+                var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
 
-                var imageInfo = new DescriptorImageInfo();
-                imageInfo.ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
-                imageInfo.ImageView = meshes[0].textureView;
-                imageInfo.Sampler = textureSampler;
+                var layouts = new DescriptorSetLayout[setCount];
+                for (var i = 0; i < setCount; i++)
+                {
+                    layouts[i] = descriptorSetLayout;
+                }
 
-                descriptorWrites[0].DstSet = descriptorSets[i];
-                descriptorWrites[0].DstBinding = 0;
-                descriptorWrites[0].DstArrayElement = 0;
-                descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
-                descriptorWrites[0].DescriptorCount = 1;
-                descriptorWrites[0].PBufferInfo = &bufferInfo;
+                var allocInfo = new DescriptorSetAllocateInfo(StructureType.DescriptorSetAllocateInfo);
+                allocInfo.DescriptorPool = meshes[m].descriptorPool;
+                allocInfo.DescriptorSetCount = (uint)setCount;
+                fixed (DescriptorSetLayout* ptr = layouts)
+                {
+                    allocInfo.PSetLayouts = ptr;
+                    meshes[m].descriptorSets = new DescriptorSet[setCount];
+                    if (vk.AllocateDescriptorSets(device, &allocInfo, meshes[m].descriptorSets) != Result.Success)
+                    {
+                        throw new Exception("failed to allocate descriptor sets.");
+                    }
+                }
 
-                descriptorWrites[1].DstSet = descriptorSets[i];
-                descriptorWrites[1].DstBinding = 1;
-                descriptorWrites[1].DstArrayElement = 0;
-                descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
-                descriptorWrites[1].DescriptorCount = 1;
-                descriptorWrites[1].PImageInfo = &imageInfo;
+                descriptorWrites[0].SType = StructureType.WriteDescriptorSet;
+                descriptorWrites[1].SType = StructureType.WriteDescriptorSet;
+                for (var i = 0; i < MaxFrameInFlight; i++)
+                {
+                    var bufferInfo = new DescriptorBufferInfo();
+                    bufferInfo.Buffer = meshes[m].uniformBuffer[i];
+                    bufferInfo.Offset = 0;
+                    bufferInfo.Range = (ulong)Unsafe.SizeOf<UniformBufferObject>();
 
-                vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
-            }
+                    var imageInfo = new DescriptorImageInfo();
+                    imageInfo.ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
+                    imageInfo.ImageView = meshes[m].textureView;
+                    imageInfo.Sampler = textureSampler;
 
-            for (var i = 0; i < MaxFrameInFlight; i++)
-            {
-                var bufferInfo = new DescriptorBufferInfo();
-                bufferInfo.Buffer = meshes[1].uniformBuffer[i];
-                bufferInfo.Offset = 0;
-                bufferInfo.Range = (ulong)Unsafe.SizeOf<UniformBufferObject>();
+                    descriptorWrites[0].DstBinding = 0;
+                    descriptorWrites[0].DstArrayElement = 0;
+                    descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
+                    descriptorWrites[0].DescriptorCount = 1;
+                    descriptorWrites[0].PBufferInfo = &bufferInfo;
 
-                var imageInfo = new DescriptorImageInfo();
-                imageInfo.ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
-                imageInfo.ImageView = meshes[1].textureView;
-                imageInfo.Sampler = textureSampler;
+                    descriptorWrites[1].DstBinding = 1;
+                    descriptorWrites[1].DstArrayElement = 0;
+                    descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
+                    descriptorWrites[1].DescriptorCount = 1;
+                    descriptorWrites[1].PImageInfo = &imageInfo;
 
-                descriptorWrites[0].DstSet = descriptor2Sets[i];
-                descriptorWrites[0].DstBinding = 0;
-                descriptorWrites[0].DstArrayElement = 0;
-                descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
-                descriptorWrites[0].DescriptorCount = 1;
-                descriptorWrites[0].PBufferInfo = &bufferInfo;
-
-                descriptorWrites[1].DstSet = descriptor2Sets[i];
-                descriptorWrites[1].DstBinding = 1;
-                descriptorWrites[1].DstArrayElement = 0;
-                descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
-                descriptorWrites[1].DescriptorCount = 1;
-                descriptorWrites[1].PImageInfo = &imageInfo;
-
-                vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
+                    for(var j = 0; j < meshes[m].gltf.descriptorSetCount; j++)
+                    {
+                        bufferInfo.Buffer = meshes[m].uniformBuffer[i * meshes[m].gltf.descriptorSetCount + j];
+                        descriptorWrites[0].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
+                        descriptorWrites[1].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
+                        vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
+                    }
+                }
             }
         }
 
@@ -1656,19 +1639,14 @@ namespace MafrixEngine.GraphicsWrapper
 
                 for (var m = 0; m < meshes.Length; m++)
                 {
-                    var mesh = meshes[m];
-                    vk.CmdBindVertexBuffers(commandBuffers[i], 0, 1, mesh.vertexBuffer, 0);
-                    vk.CmdBindIndexBuffer(commandBuffers[i], mesh.indicesBuffer, 0, IndexType.Uint32);
-                    if(m == 0)
+                    //vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, meshes[m].descriptorSets[i], 0, null);
+                    meshes[m].BindCommand(vk, commandBuffers[i], BindDescriptorSets);
+
+                    void BindDescriptorSets(int nodeIndex)
                     {
-                        vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, descriptorSets[i], 0, null);
+                        var idx = i *meshes[m].gltf.descriptorSetCount + nodeIndex;
+                        vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, meshes[m].descriptorSets[idx], 0, null);
                     }
-                    else
-                    {
-                        vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, descriptor2Sets[i], 0, null);
-                    }
-                    //vk.CmdDrawIndexed(commandBuffers[i], mesh.instanceCount, 1, 0, (int)mesh.firstIndex, 0);
-                    vk.CmdDrawIndexed(commandBuffers[i], mesh.instanceCount, 1, 0, 0, 0);// (uint)m);
                 }
 
 
@@ -1710,28 +1688,18 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateDescriptorSetLayout()
         {
-            var uboLayoutBinding = new DescriptorSetLayoutBinding();
-            uboLayoutBinding.Binding = 0;
-            uboLayoutBinding.DescriptorType = DescriptorType.UniformBuffer;
-            uboLayoutBinding.DescriptorCount = 1;
-            uboLayoutBinding.StageFlags = ShaderStageFlags.VertexBit;
-            uboLayoutBinding.PImmutableSamplers = null;
-
-            var samplerLayoutBinding = new DescriptorSetLayoutBinding();
-            samplerLayoutBinding.Binding = 1;
-            samplerLayoutBinding.DescriptorCount = 1;
-            samplerLayoutBinding.DescriptorType = DescriptorType.CombinedImageSampler;
-            samplerLayoutBinding.PImmutableSamplers = null;
-            samplerLayoutBinding.StageFlags = ShaderStageFlags.FragmentBit;
-
-            var bindings = stackalloc DescriptorSetLayoutBinding[2];
-            bindings[0] = uboLayoutBinding;
-            bindings[1] = samplerLayoutBinding;
+            var shaderDefines = new ShaderDefine[2];
+            shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit);
+            shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit);
+            var pipelineInfo = new PipelineInfo(vk, shaderDefines);
 
             var layoutInfo = new DescriptorSetLayoutCreateInfo(StructureType.DescriptorSetLayoutCreateInfo);
             layoutInfo.BindingCount = 2;
-            layoutInfo.PBindings = bindings;
-            if(vk.CreateDescriptorSetLayout(device, layoutInfo, null, out descriptorSetLayout) != Result.Success)
+            fixed(DescriptorSetLayoutBinding* bindings = pipelineInfo.setLayoutBindings)
+            {
+                layoutInfo.PBindings = bindings;
+            }
+            if (vk.CreateDescriptorSetLayout(device, layoutInfo, null, out descriptorSetLayout) != Result.Success)
             {
                 throw new Exception("failed to create descriptor set layout.");
             }
@@ -1744,9 +1712,6 @@ namespace MafrixEngine.GraphicsWrapper
                 vk.DestroySemaphore(device, imageAvailableSemaphores[i], null);
                 vk.DestroySemaphore(device, renderFinishedSemaphores[i], null);
                 vk.DestroyFence(device, inFlightFences[i], null);
-
-                //vk.DestroyBuffer(device, uniformBuffers[i], null);
-                //vk.FreeMemory(device, uniformBuffersMemory[i], null);
             }
             vk.DestroyCommandPool(device, commandPool, null);
             foreach(var framebuffer in swapchainFramebuffers)
@@ -1757,13 +1722,7 @@ namespace MafrixEngine.GraphicsWrapper
             vk.DestroyImageView(device, depthImageView, null);
             vk.DestroyImage(device, depthImage, null);
             vk.FreeMemory(device, depthImageMemory, null);
-            //vk.DestroyImageView(device, textureImageView, null);
-            //vk.DestroyImage(device, textureImage, null);
-            //vk.FreeMemory(device, textureImageMemory, null);
 
-            //vk.DestroyImage(device, texture2Image, null);
-            //vk.DestroyImageView(device, texture2ImageView, null);
-            //vk.FreeMemory(device, texture2ImageMemory, null);
             foreach(var mesh in meshes)
             {
                 vk.FreeMemory(device, mesh.indiceBufferMemory, null);
@@ -1783,11 +1742,11 @@ namespace MafrixEngine.GraphicsWrapper
                 {
                     vk.DestroyBuffer(device, buffer, null);
                 }
+                vk.DestroyDescriptorPool(device, mesh.descriptorPool, null);
+
                 mesh.Dispose();
             }
 
-            vk.DestroyDescriptorPool(device, descriptor2Pool, null);
-            vk.DestroyDescriptorPool(device, descriptorPool, null);
             vk.DestroyDescriptorSetLayout(device, descriptorSetLayout, null);
             vk.DestroyPipeline(device, graphicsPipeline, null);
             vk.DestroyPipelineLayout(device, pipelineLayout, null);

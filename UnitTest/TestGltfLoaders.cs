@@ -100,11 +100,12 @@ namespace UnitTest
         }
 
         private string gltfName = @"Asserts/viking_room/scene.gltf";
+        private string gltf2Name = @"Asserts/gaz-66/scene.gltf";
         [Fact]
         public unsafe void TestGltf2Loader()
         {
             var path = Directory.GetCurrentDirectory();
-            var filename = Path.Combine(path, gltfName);
+            var filename = Path.Combine(path, gltf2Name);
             Assert.True(Directory.Exists(path));
 
             var gltf = Interface.LoadModel(filename);

@@ -819,24 +819,25 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateGraphicsPipeline()
         {
-            var vertShaderCode = LoadEmbeddedResourceBytes("MafrixEngine.Shaders.triangle.vert.spv");
-            var fragShaderCode = LoadEmbeddedResourceBytes("MafrixEngine.Shaders.triangle.frag.spv");
-            var vertShaderModule = CreateShaderModule(vertShaderCode);
-            var fragShaderModule = CreateShaderModule(fragShaderCode);
+            // parse DescriptorSetLayout from shader.spirv
+            var shaderDefines = new ShaderDefine[2];
+            shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit);
+            shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit);
+            // using some class to simplfy pipeline create
+            var pipelineInfos = new PipelineInfo(vk, device, shaderDefines);
 
-            // init shader stage
-            var vertShaderStageInfo = new PipelineShaderStageCreateInfo(StructureType.PipelineShaderStageCreateInfo);
-            vertShaderStageInfo.Stage = ShaderStageFlags.VertexBit;
-            vertShaderStageInfo.Module = vertShaderModule;
-            vertShaderStageInfo.PName = (byte*)SilkMarshal.StringToPtr("main");
-            var fragShaderStageInfo = new PipelineShaderStageCreateInfo(StructureType.PipelineShaderStageCreateInfo);
-            fragShaderStageInfo.Stage = ShaderStageFlags.FragmentBit;
-            fragShaderStageInfo.Module = fragShaderModule;
-            fragShaderStageInfo.PName = (byte*)SilkMarshal.StringToPtr("main");
+            var layoutBindings = pipelineInfos.setLayoutInfo.GetLayoutBindings(0);
+            var layoutInfo = new DescriptorSetLayoutCreateInfo(StructureType.DescriptorSetLayoutCreateInfo);
+            layoutInfo.BindingCount = (uint)layoutBindings.Length;
+            fixed (DescriptorSetLayoutBinding* bindings = layoutBindings)
+            {
+                layoutInfo.PBindings = bindings;
+            }
+            if (vk.CreateDescriptorSetLayout(device, layoutInfo, null, out descriptorSetLayout) != Result.Success)
+            {
+                throw new Exception("failed to create descriptor set layout.");
+            }
 
-            var shaderStages = stackalloc PipelineShaderStageCreateInfo[2];
-            shaderStages[0] = vertShaderStageInfo;
-            shaderStages[1] = fragShaderStageInfo;
 
             var bindingDescription = Vertex.GetBindingDescription();
             var attributeDescriptions = Vertex.GetAttributeDescriptions();
@@ -919,8 +920,6 @@ namespace MafrixEngine.GraphicsWrapper
             depthStencil.StencilTestEnable = Vk.False;
 
             var pipelineInfo = new GraphicsPipelineCreateInfo(StructureType.GraphicsPipelineCreateInfo);
-            pipelineInfo.StageCount = 2;
-            pipelineInfo.PStages = shaderStages;
             pipelineInfo.PVertexInputState = &vertexInputInfo;
             pipelineInfo.PInputAssemblyState = &inputAssembly;
             pipelineInfo.PViewportState = &viewportState;
@@ -932,14 +931,16 @@ namespace MafrixEngine.GraphicsWrapper
             pipelineInfo.RenderPass = renderPass;
             pipelineInfo.Subpass = 0;
             pipelineInfo.BasePipelineHandle = default;
+            fixed(PipelineShaderStageCreateInfo* stagePtr = pipelineInfos.pipelineShaderStageCreateInfos)
+            {
+                pipelineInfo.StageCount = (uint)pipelineInfos.pipelineShaderStageCreateInfos.Length;
+                pipelineInfo.PStages = stagePtr;
+            }
 
-            if(vk.CreateGraphicsPipelines(device, default, 1, in pipelineInfo, null, out graphicsPipeline) != Result.Success)
+            if (vk.CreateGraphicsPipelines(device, default, 1, in pipelineInfo, null, out graphicsPipeline) != Result.Success)
             {
                 throw new Exception("failed to create graphics pipeline.");
             }
-
-            vk.DestroyShaderModule(device, vertShaderModule, null);
-            vk.DestroyShaderModule(device, fragShaderModule, null);
         }
 
         private unsafe void CreateBuffer(ulong size, BufferUsageFlags usage,
@@ -1688,21 +1689,7 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateDescriptorSetLayout()
         {
-            var shaderDefines = new ShaderDefine[2];
-            shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit);
-            shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit);
-            var pipelineInfo = new PipelineInfo(vk, shaderDefines);
-
-            var layoutInfo = new DescriptorSetLayoutCreateInfo(StructureType.DescriptorSetLayoutCreateInfo);
-            layoutInfo.BindingCount = 2;
-            fixed(DescriptorSetLayoutBinding* bindings = pipelineInfo.setLayoutBindings)
-            {
-                layoutInfo.PBindings = bindings;
-            }
-            if (vk.CreateDescriptorSetLayout(device, layoutInfo, null, out descriptorSetLayout) != Result.Success)
-            {
-                throw new Exception("failed to create descriptor set layout.");
-            }
+            
         }
 
         public unsafe void Cleanup()

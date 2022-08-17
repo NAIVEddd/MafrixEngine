@@ -14,6 +14,7 @@ using System.Runtime.InteropServices;
 using Silk.NET.Vulkan;
 using SPIRVCross;
 using static SPIRVCross.SPIRV;
+using MafrixEngine.ModelLoaders;
 
 namespace UnitTest
 {
@@ -100,6 +101,28 @@ namespace UnitTest
         }
 
         [Fact]
+        public unsafe void TestDescriptorSetLayoutInfo()
+        {
+            var vk = Vk.GetApi();
+            var info = new DescriptorSetLayoutInfo(vk);
+            var vertInfo = new ShaderInfo(vk, ShaderStageFlags.VertexBit, "MafrixEngine.Shaders.triangle.vert.spv");
+            foreach(var binding in vertInfo.layoutBindings)
+            {
+                info.AddBinding(0, binding);
+            }
+            Assert.Equal(1u, info.SetCount);
+            Assert.Single(info.GetLayoutBindings(0));
+
+            var fragInfo = new ShaderInfo(vk, ShaderStageFlags.FragmentBit, "MafrixEngine.Shaders.triangle.frag.spv");
+            foreach(var binding in fragInfo.layoutBindings)
+            {
+                info.AddBinding(0, binding);
+            }
+            Assert.Equal(1u, info.SetCount);
+            Assert.Equal(2, info.GetLayoutBindings(0).Length);
+        }
+
+        [Fact]
         public unsafe void TestShaderInfo()
         {
             var vk = Vk.GetApi();
@@ -120,9 +143,9 @@ namespace UnitTest
             shaderDefines[0] = new ShaderDefine(vertShader, ShaderStageFlags.VertexBit, false);
             shaderDefines[1] = new ShaderDefine(fragShader, ShaderStageFlags.FragmentBit, false);
 
-            var pipelineInfo = new PipelineInfo(vk, shaderDefines);
-            Assert.NotNull(pipelineInfo);
-            Assert.Equal(2, pipelineInfo.setLayoutBindings.Length);
+            //var pipelineInfo = new PipelineInfo(vk, shaderDefines);
+            //Assert.NotNull(pipelineInfo);
+            //Assert.Equal(2, pipelineInfo.setLayoutBindings.Length);
         }
     }
 }

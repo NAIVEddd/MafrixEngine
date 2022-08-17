@@ -46,6 +46,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="Asserts\gaz-66\license.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="Asserts\gaz-66\scene.bin">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

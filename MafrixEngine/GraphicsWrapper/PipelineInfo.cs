@@ -17,10 +17,50 @@ using static SPIRVCross.SPIRV;
 
 namespace MafrixEngine.GraphicsWrapper
 {
+    public class DescriptorSetLayoutInfo
+    {
+        private Vk vk;
+        private Dictionary<ValueTuple<uint, uint>, DescriptorSetLayoutBinding> keyValueBindings;
+        private DescriptorSetLayoutBinding[][] layoutBindings;
+        private uint setCount;
+        public uint SetCount => setCount;
+
+        public DescriptorSetLayoutInfo(Vk vk)
+        {
+            this.vk = vk;
+            keyValueBindings = new Dictionary<ValueTuple<uint, uint>, DescriptorSetLayoutBinding>();
+            setCount = 0;
+        }
+
+        public void AddBinding(uint set, DescriptorSetLayoutBinding binding)
+        {
+            if(set + 1 > setCount)
+            {
+                setCount = set + 1;
+            }
+            var bind = binding.Binding;
+            keyValueBindings.Add((set, bind), binding);
+        }
+
+        public DescriptorSetLayoutBinding[] GetLayoutBindings(uint set)
+        {
+            var bindings = new List<DescriptorSetLayoutBinding>();
+            foreach(var binding in keyValueBindings.Keys)
+            {
+                if(binding.Item1 == set)
+                {
+                    bindings.Add(keyValueBindings[binding]);
+                }
+            }
+            return bindings.ToArray();
+        }
+    }
+
     public class ShaderInfo
     {
         private Vk vk;
         private ShaderStageFlags stageFlags;
+        public byte[] shaderCode;
         public int BindingCount 
         {
             get { return layoutBindings.Length; }
@@ -32,16 +72,15 @@ namespace MafrixEngine.GraphicsWrapper
             this.vk = vk;
             this.stageFlags = stageFlags;
 
-            byte[] shaderBytes;
             if(isManifestResource)
             {
-                shaderBytes = LoadEmbeddedResourceBytes(shaderName);
+                shaderCode = LoadEmbeddedResourceBytes(shaderName);
             }
             else
             {
-                shaderBytes = System.IO.File.ReadAllBytes(shaderName);
+                shaderCode = System.IO.File.ReadAllBytes(shaderName);
             }
-            ParseInfo(shaderBytes);
+            ParseInfo(shaderCode);
         }
 
         private unsafe void ParseInfo(byte[] shaderBytes)
@@ -216,21 +255,67 @@ namespace MafrixEngine.GraphicsWrapper
     public class PipelineInfo
     {
         private Vk vk;
+        private Device device;
+        public DescriptorSetLayoutInfo setLayoutInfo;
         public DescriptorSetLayoutBinding[] setLayoutBindings;
+        public PipelineShaderStageCreateInfo[] pipelineShaderStageCreateInfos;
 
-        public PipelineInfo(Vk vk, ShaderDefine[] shaderDefines)
+        public PipelineInfo(Vk vk, Device device, ShaderDefine[] shaderDefines)
         {
             this.vk = vk;
+            this.device = device;
+            setLayoutInfo = new DescriptorSetLayoutInfo(vk);
+
             var shaderInfos = new ShaderInfo[shaderDefines.Length];
             var layoutBindings = new DescriptorSetLayoutBinding[shaderDefines.Length][];
-            for(var i = 0; i < shaderDefines.Length; i++)
+            pipelineShaderStageCreateInfos = new PipelineShaderStageCreateInfo[shaderDefines.Length];
+            for (var i = 0; i < shaderDefines.Length; i++)
             {
                 shaderInfos[i] = new ShaderInfo(vk, shaderDefines[i].shaderStage,
                     shaderDefines[i].name, shaderDefines[i].isManifestResource);
                 layoutBindings[i] = shaderInfos[i].layoutBindings;
+                foreach (var binding in shaderInfos[i].layoutBindings)
+                {
+                    setLayoutInfo.AddBinding(0, binding); 
+                }
+
+                pipelineShaderStageCreateInfos[i] = ToStageCreateInfo(shaderInfos[i].shaderCode, shaderDefines[i]);
             }
 
             ShaderInfo.AggregateBindings(layoutBindings, out setLayoutBindings);
+        }
+
+        private unsafe PipelineShaderStageCreateInfo ToStageCreateInfo(byte[] code, ShaderDefine shaderDefine)
+        {
+            var stageCreateInfo = new PipelineShaderStageCreateInfo(StructureType.PipelineShaderStageCreateInfo);
+            stageCreateInfo.Stage = shaderDefine.shaderStage;
+            stageCreateInfo.Module = CreateShaderModule(code);
+            stageCreateInfo.PName = (byte*)SilkMarshal.StringToPtr("main");
+            return stageCreateInfo;
+        }
+
+        private unsafe ShaderModule CreateShaderModule(byte[] code)
+        {
+            var createInfo = new ShaderModuleCreateInfo(StructureType.ShaderModuleCreateInfo);
+            createInfo.CodeSize = (nuint)code.Length;
+            fixed (byte* ptr = code)
+            {
+                createInfo.PCode = (uint*)ptr;
+            }
+            var shaderModule = new ShaderModule();
+            if (vk.CreateShaderModule(device, in createInfo, null, out shaderModule) != Result.Success)
+            {
+                throw new Exception("failed to create shader module.");
+            }
+            return shaderModule;
+        }
+
+        unsafe ~PipelineInfo()
+        {
+            foreach(var module in pipelineShaderStageCreateInfos)
+            {
+                vk.DestroyShaderModule(device, module.Module, null);
+            }
         }
     }
 }

@@ -5,7 +5,6 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using Silk.NET.Assimp;
 using Silk.NET.Core;
 using Silk.NET.Core.Native;
 using Silk.NET.Maths;
@@ -17,6 +16,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
 using MafrixEngine.ModelLoaders;
+using MafrixEngine.Cameras;
 
 using Image = Silk.NET.Vulkan.Image;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
@@ -28,9 +28,6 @@ namespace MafrixEngine.GraphicsWrapper
     using Vec2 = Vector2D<float>;
     using Vec3 = Vector3D<float>;
     using Mat4 = Matrix4X4<float>;
-    
-
-    
 
     public struct Mesh : IDisposable
     {
@@ -71,10 +68,13 @@ namespace MafrixEngine.GraphicsWrapper
 
     public class VulkanWrapper : IDisposable
     {
-        private Vk vk;
-        public Instance instance;
-        public PhysicalDevice physicalDevice;
-        public Device device;
+        public Camera camera;
+
+        private VkContext vkContext;
+        private Vk vk { get => vkContext.vk; }
+        public Instance instance { get => vkContext.instance; }
+        public PhysicalDevice physicalDevice { get => vkContext.physicalDevice; }
+        public Device device { get => vkContext.device; }
         public Queue graphicsQueue;
         public IWindow window;
         public KhrSurface khrSurface;
@@ -143,8 +143,9 @@ namespace MafrixEngine.GraphicsWrapper
 
         public VulkanWrapper()
         {
-            vk = Vk.GetApi();
+            //vk = Vk.GetApi();
             window = InitWindow();
+            vkContext = new VkContext();
         }
 
         private unsafe void MarshalAssignString(out byte* targ, string s)
@@ -176,18 +177,19 @@ namespace MafrixEngine.GraphicsWrapper
 
         public void InitVulkan()
         {
-            CreateInstance();
-            SetupDebugMessager();
+            vkContext.Initialize("Render", new Version32(0, 0, 1));
+            vk.TryGetInstanceExtension(instance, out khrSurface);
+            vk.TryGetInstanceExtension(instance, out khrSwapchain);
+            vk.GetDeviceQueue(device, 0, 0, out graphicsQueue);
             CreateSurface();
-            PickPhysicalDevice();
-            CreateLogicalDevice();
+            // extensions
+            SetupDebugMessager();
 
             staging = new StagingBuffer(vk, physicalDevice, device);
 
             CreateSwapChain();
             CreateImageViews();
             CreateRenderPass();
-            CreateDescriptorSetLayout();
             CreateGraphicsPipeline();
             CreateCommandPool();
             CreateDepthResources();
@@ -202,6 +204,10 @@ namespace MafrixEngine.GraphicsWrapper
             CreateCommandBuffers();
             CreateSyncObjects();
 
+            var pos = new Vec3(35.0f, 35.0f, 35.0f);
+            var dir = new Vec3(0.0f) - pos;
+            camera = new Camera(new CameraCoordinate(pos, dir, new Vec3(0.0f, -1.0f, 0.0f)),
+                            new ProjectInfo(45.0f, (float)swapchainExtent.Width / (float)swapchainExtent.Height));
             startTime = DateTime.Now;
         }
 
@@ -300,10 +306,7 @@ namespace MafrixEngine.GraphicsWrapper
         {
             var time = (float)(DateTime.Now - startTime).TotalSeconds;
 
-            var view = Matrix4X4.CreateLookAt<float>(new Vec3(35.0f, 35.0f, 35.0f), new Vec3(0.0f), new Vec3(0.0f, -1.0f, 0.0f));
-            var proj = Matrix4X4.CreatePerspectiveFieldOfView<float>(Scalar.DegreesToRadians<float>(45.0f),
-                (float)swapchainExtent.Width / (float)swapchainExtent.Height, 0.1f, 100.0f);
-            proj.M11 *= -1.0f;
+            camera.GetProjAndView(out var proj, out var view);
 
             var uboptr = stackalloc UniformBufferObject[1];
             uboptr->proj = proj;
@@ -349,137 +352,6 @@ namespace MafrixEngine.GraphicsWrapper
         {
             surface = window.VkSurface!.Create<AllocationCallbacks>(instance.ToHandle(), null).ToSurface();
         }
-        public unsafe void CreateInstance()
-        {
-            if(EnableValidationLayers)
-            {
-                validationLayers = GetOptimalValidationLayers();
-                if(validationLayers is null)
-                {
-                    throw new NotSupportedException("Validation layers requested, but not available!");
-                }
-            }
-
-            var appInfo = new ApplicationInfo();
-            appInfo.SType = StructureType.ApplicationInfo;
-            MarshalAssignString(out appInfo.PApplicationName, "First Vulkan Application");
-            appInfo.ApplicationVersion = new Version32(0, 0, 1);
-            MarshalAssignString(out appInfo.PEngineName, "Mafrix Engine");
-            appInfo.EngineVersion = new Version32(0, 0, 1);
-            appInfo.ApiVersion = Vk.Version11;
-
-            var createInfo = new InstanceCreateInfo();
-            createInfo.SType = StructureType.InstanceCreateInfo;
-            createInfo.PApplicationInfo = &appInfo;
-
-            var extensions = window.VkSurface!.GetRequiredExtensions(out var extCount);
-#if DEBUG
-            // display supported Extension Properties
-            {
-                uint extensionCount = 0;
-                vk.EnumerateInstanceExtensionProperties((byte*)null, &extensionCount, null);
-                var extensionsArray = stackalloc ExtensionProperties[(int)extensionCount];
-                vk.EnumerateInstanceExtensionProperties((byte*)null, &extensionCount, extensionsArray);
-                Console.WriteLine("Instance Extension properties include:");
-                for(var i = 0; i < extensionCount; i++)
-                {
-                    var extension = extensionsArray[i];
-                    var name = Marshal.PtrToStringAnsi((IntPtr)extension.ExtensionName);
-                    Console.WriteLine(name);
-                }
-                Console.WriteLine("-------------------------------------");
-            }
-
-            var newExtensions = stackalloc byte*[(int)(extCount + instanceExtensions.Length)];
-            for(var i = 0; i < extCount; i++)
-            {
-                newExtensions[i] = extensions[i];
-            }
-            for(var i = 0; i < instanceExtensions.Length; i++)
-            {
-                newExtensions[extCount + i] = (byte*)SilkMarshal.StringToPtr(instanceExtensions[i]);
-            }
-            extCount += (uint) instanceExtensions.Length;
-#else
-            var newExtensions = extensions;
-#endif
-            createInfo.EnabledExtensionCount = extCount;
-            createInfo.PpEnabledExtensionNames = newExtensions;
-
-#if DEBUG
-            createInfo.EnabledLayerCount = (uint)validationLayers.Length;
-            createInfo.PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(validationLayers);
-#endif
-
-            if (vk.CreateInstance(createInfo, null, out instance) != Result.Success)
-            {
-                throw new Exception("Failed to create instance!");
-            }
-            vk.CurrentInstance = instance;
-
-            if(!vk.TryGetInstanceExtension(instance, out khrSurface))
-            {
-                throw new NotSupportedException("KHR_surface extension not found.");
-            }
-
-            MarshalFreeString(appInfo.PApplicationName);
-            MarshalFreeString(appInfo.PEngineName);
-            if(EnableValidationLayers)
-            {
-                SilkMarshal.Free((nint)createInfo.PpEnabledLayerNames);
-            }
-        }
-
-        private unsafe void CreateLogicalDevice()
-        {
-            var indices = FindQueueFamilies(physicalDevice);
-            var uniqueQueueFamilies = indices.GraphicsFamily!.Value == indices.PresentFamily!.Value
-                ? new[] { indices.GraphicsFamily.Value }
-                : new[] { indices.GraphicsFamily.Value, indices.PresentFamily.Value };
-
-            using var mem = GlobalMemory.Allocate((int)uniqueQueueFamilies.Length * sizeof(DeviceQueueCreateInfo));
-            var queueCreateInfos = (DeviceQueueCreateInfo*)Unsafe.AsPointer(ref mem.GetPinnableReference());
-
-            var queuePriority = 1f;
-            for(var i = 0; i < uniqueQueueFamilies.Length; i++)
-            {
-                var queueCreateInfo = new DeviceQueueCreateInfo(StructureType.DeviceQueueCreateInfo);
-                queueCreateInfo.QueueFamilyIndex = uniqueQueueFamilies[i];
-                queueCreateInfo.QueueCount = 1;
-                queueCreateInfo.PQueuePriorities = &queuePriority;
-                queueCreateInfos[i] = queueCreateInfo;
-            }
-
-            var deviceFeatures = new PhysicalDeviceFeatures();
-            deviceFeatures.SamplerAnisotropy = Vk.True;
-            var createInfo = new DeviceCreateInfo(StructureType.DeviceCreateInfo);
-            createInfo.QueueCreateInfoCount = (uint)uniqueQueueFamilies.Length;
-            createInfo.PQueueCreateInfos = queueCreateInfos;
-            createInfo.PEnabledFeatures = &deviceFeatures;
-            createInfo.EnabledExtensionCount = (uint)deviceExtensions.Length;
-
-            var enabledExtensionNames = SilkMarshal.StringArrayToPtr(deviceExtensions);
-            createInfo.PpEnabledExtensionNames = (byte**)enabledExtensionNames;
-
-            if(EnableValidationLayers)
-            {
-                createInfo.EnabledLayerCount = (uint)validationLayers.Length;
-                createInfo.PpEnabledLayerNames = (byte**)SilkMarshal.StringArrayToPtr(validationLayers);
-            }
-            else
-            {
-                createInfo.EnabledLayerCount=0;
-            }
-
-            vk.CreateDevice(physicalDevice, in createInfo, null, out device);
-            vk.GetDeviceQueue(device, indices.GraphicsFamily.Value, 0, out graphicsQueue);
-
-            vk.CurrentDevice = device;
-            if(!vk.TryGetDeviceExtension(instance, device, out khrSwapchain))
-            {
-                throw new NotSupportedException("KHR_swapchain extension not found.");
-            }
-        }
 
         private unsafe void SetupDebugMessager()
         {
@@ -516,35 +388,6 @@ namespace MafrixEngine.GraphicsWrapper
             return Vk.False;
         }
 
-        private unsafe void PickPhysicalDevice()
-        {
-            var devices = vk.GetPhysicalDevices(instance);
-            if(!devices.Any())
-            {
-                throw new NotSupportedException("Failed to find GPUs with vulkan support.");
-            }
-
-            physicalDevice = devices.FirstOrDefault(device =>
-            {
-                var indices = FindQueueFamilies(device);
-                var extensionsSupported = CheckDeviceExtensionSupport(device);
-                var swapChainAdequate = false;
-                if (extensionsSupported)
-                {
-                    var swapChainSupport = QuerySwapChainSupport(device);
-                    swapChainAdequate = swapChainSupport.Formats.Length != 0 && swapChainSupport.PresentModes.Length != 0;
-                }
-                vk.GetPhysicalDeviceFeatures(device, out var supportedFeatures);
-                return indices.IsComplete()
-                    && extensionsSupported && swapChainAdequate
-                    && supportedFeatures.SamplerAnisotropy;
-            });
-
-            if(physicalDevice.Handle == 0)
-            {
-                throw new Exception("No suitable device.");
-            }
-        }
         public struct SwapChainSupportDetails
         {
             public SurfaceCapabilitiesKHR Capabilities { get; set; }
@@ -588,10 +431,7 @@ namespace MafrixEngine.GraphicsWrapper
 
             return details;
         }
-        private unsafe bool CheckDeviceExtensionSupport(PhysicalDevice device)
-        {
-            return deviceExtensions.All(ext => vk.IsDeviceExtensionPresent(instance, ext));
-        }
+        
         public struct QueueFamilyIndices
         {
             public uint? GraphicsFamily { get; set; }
@@ -1352,27 +1192,6 @@ namespace MafrixEngine.GraphicsWrapper
                     staging.CopyDataToBuffer(stCommand, meshes[m].vertexBuffer, ptr, (uint)bufferSize);
                 }
             }
-            //bufferSize = (ulong)GetArrayByteSize(meshes[0].vertices);
-            //CreateBuffer(bufferSize,
-            //    BufferUsageFlags.TransferDstBit |
-            //    BufferUsageFlags.VertexBufferBit,
-            //    MemoryPropertyFlags.DeviceLocalBit,
-            //    out meshes[0].vertexBuffer, out meshes[0].vertexBufferMemory);
-            //fixed (void* ptr = meshes[0].vertices)
-            //{
-            //    staging.CopyDataToBuffer(stCommand, meshes[0].vertexBuffer, ptr, (uint)bufferSize);
-            //}
-
-            //bufferSize = (ulong)GetArrayByteSize(meshes[1].vertices);
-            //CreateBuffer(bufferSize,
-            //    BufferUsageFlags.TransferDstBit |
-            //    BufferUsageFlags.VertexBufferBit,
-            //    MemoryPropertyFlags.DeviceLocalBit,
-            //    out meshes[1].vertexBuffer, out meshes[1].vertexBufferMemory);
-            //fixed (void* ptr = meshes[1].vertices)
-            //{
-            //    staging.CopyDataToBuffer(stCommand, meshes[1].vertexBuffer, ptr, (uint)bufferSize);
-            //}
         }
 
         private unsafe void CreateIndexBuffer()
@@ -1394,27 +1213,6 @@ namespace MafrixEngine.GraphicsWrapper
                     staging.CopyDataToBuffer(stCommand, meshes[m].indicesBuffer, ptr, (uint)bufferSize);
                 }
             }
-            //bufferSize = (ulong)GetArrayByteSize(meshes[0].indices);
-            //CreateBuffer(bufferSize,
-            //    BufferUsageFlags.TransferDstBit |
-            //    BufferUsageFlags.IndexBufferBit,
-            //    MemoryPropertyFlags.DeviceLocalBit,
-            //    out meshes[0].indicesBuffer, out meshes[0].indiceBufferMemory);
-            //fixed (void* ptr = meshes[0].indices)
-            //{
-            //    staging.CopyDataToBuffer(stCommand, meshes[0].indicesBuffer, ptr, (uint)bufferSize);
-            //}
-
-            //bufferSize = (ulong)GetArrayByteSize(meshes[1].indices);
-            //CreateBuffer(bufferSize,
-            //    BufferUsageFlags.TransferDstBit |
-            //    BufferUsageFlags.IndexBufferBit,
-            //    MemoryPropertyFlags.DeviceLocalBit,
-            //    out meshes[1].indicesBuffer, out meshes[1].indiceBufferMemory);
-            //fixed (void* ptr = meshes[1].indices)
-            //{
-            //    staging.CopyDataToBuffer(stCommand, meshes[1].indicesBuffer, ptr, (uint)bufferSize);
-            //}
         }
 
         private unsafe void CreateUniformBuffers()
@@ -1534,22 +1332,6 @@ namespace MafrixEngine.GraphicsWrapper
             }
 
             throw new Exception("failed to find suitable memory type!");
-        }
-
-        private unsafe ShaderModule CreateShaderModule(byte[] code)
-        {
-            var createInfo = new ShaderModuleCreateInfo(StructureType.ShaderModuleCreateInfo);
-            createInfo.CodeSize = (nuint) code.Length;
-            fixed (byte* ptr = code)
-            {
-                createInfo.PCode = (uint*)ptr;
-            }
-            var shaderModule = new ShaderModule();
-            if(vk.CreateShaderModule(device, in createInfo, null, out shaderModule) != Result.Success)
-            {
-                throw new Exception("failed to create shader module.");
-            }
-            return shaderModule;
         }
 
         private unsafe void CreateFramebuffers()
@@ -1687,11 +1469,6 @@ namespace MafrixEngine.GraphicsWrapper
             }
         }
 
-        private unsafe void CreateDescriptorSetLayout()
-        {
-            
-        }
-
         public unsafe void Cleanup()
         {
             for(var i = 0; i < MaxFrameInFlight; i++)
@@ -1746,27 +1523,14 @@ namespace MafrixEngine.GraphicsWrapper
 
             staging.Dispose();
 
-            vk.DestroyDevice(device, null);
             if(EnableValidationLayers)
             {
                 debugUtils.DestroyDebugUtilsMessenger(instance, debugMessager, null);
             }
             khrSurface.DestroySurface(instance, surface, null);
-            vk.DestroyInstance(instance, null);
+            vkContext.Dispose();
             window.Close();
             window.Dispose();
-        }
-
-        internal static byte[] LoadEmbeddedResourceBytes(string path)
-        {
-            using (var s = typeof(VulkanWrapper).Assembly.GetManifestResourceStream(path))
-            {
-                using (var ms = new MemoryStream())
-                {
-                    s.CopyTo(ms);
-                    return ms.ToArray();
-                }
-            }
         }
 
         public void Dispose()

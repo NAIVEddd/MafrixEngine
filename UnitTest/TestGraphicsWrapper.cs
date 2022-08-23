@@ -11,18 +11,42 @@ using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using Silk.NET.Core;
+using Silk.NET.Vulkan;
+using Image = SixLabors.ImageSharp.Image;
 
 namespace UnitTest
 {
     public class TestGraphicsWrapper
     {
         [Fact]
-        public void TestCreateInstance()
+        public void TestVkInstance()
         {
-            var wrapper = new VulkanWrapper();
+            var vk = Vk.GetApi();
+            using var vkInstance = new VkInstance(vk);
+            Assert.Equal(0, vkInstance.instance.Handle);
+            vkInstance.Initialize("TestInstance", new Version32(0, 0, 1));
+            Assert.NotEqual(0, vkInstance.instance.Handle);
+        }
 
-            wrapper.CreateInstance();
-            Assert.NotNull(wrapper);
+        [Fact]
+        public void TestVkContext()
+        {
+            using var vkContext = new VkContext();
+            Assert.NotNull(vkContext.vk);
+            Assert.Equal(0, vkContext.instance.Handle);
+            Assert.Equal(0, vkContext.physicalDevice.Handle);
+            Assert.Equal(0, vkContext.device.Handle);
+
+            vkContext.Initialize("Test", new Version32(0,0,1));
+            Assert.NotEqual(0, vkContext.instance.Handle);
+            Assert.NotEqual(0, vkContext.physicalDevice.Handle);
+            Assert.NotEqual(0, vkContext.device.Handle);
+            Assert.ThrowsAny<Exception>(
+                () => VkContext.DebugCheck(Result.ErrorDeviceLost, "DeviceLost"));
+            Assert.Throws<NotImplementedException>(
+                () => VkContext.DebugCheck(Result.ErrorMemoryMapFailed,
+                                    new NotImplementedException("Not support MemoryMap!")));
         }
 
         [Fact]

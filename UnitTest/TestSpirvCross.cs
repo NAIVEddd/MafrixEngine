@@ -15,6 +15,7 @@ using Silk.NET.Vulkan;
 using SPIRVCross;
 using static SPIRVCross.SPIRV;
 using MafrixEngine.ModelLoaders;
+using Silk.NET.Core;
 
 namespace UnitTest
 {
@@ -138,14 +139,17 @@ namespace UnitTest
         [Fact]
         public unsafe void TestPipelineInfo()
         {
-            var vk = Vk.GetApi();
+            var vkContext = new VkContext();
+            vkContext.Initialize("TestPipelineInfo", new Version32(0,0,1));
+
+            var vk = vkContext.vk;
             var shaderDefines = new ShaderDefine[2];
             shaderDefines[0] = new ShaderDefine(vertShader, ShaderStageFlags.VertexBit, false);
             shaderDefines[1] = new ShaderDefine(fragShader, ShaderStageFlags.FragmentBit, false);
 
-            //var pipelineInfo = new PipelineInfo(vk, shaderDefines);
-            //Assert.NotNull(pipelineInfo);
-            //Assert.Equal(2, pipelineInfo.setLayoutBindings.Length);
+            var pipelineInfo = new PipelineInfo(vk, vkContext.device, shaderDefines);
+            Assert.NotNull(pipelineInfo);
+            Assert.Equal(2, pipelineInfo.setLayoutBindings.Length);
         }
     }
 }

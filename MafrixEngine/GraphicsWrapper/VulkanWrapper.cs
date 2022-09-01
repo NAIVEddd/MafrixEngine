@@ -54,15 +54,17 @@ namespace MafrixEngine.GraphicsWrapper
         public Mat4 matrix;
         public float frameRotate;
         public GltfLoader gltf;
+        public Gltf2RootNode gltf2;
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer, Action<int> action)
         {
-            gltf.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
+            //gltf.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
+            gltf2.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
         }
 
         public void Dispose()
         {
-            //throw new NotImplementedException();
+            gltf2.Dispose();
         }
     }
 
@@ -107,6 +109,7 @@ namespace MafrixEngine.GraphicsWrapper
         public Format swapchainImageFormat;
         public Extent2D swapchainExtent;
         public ImageView[] swapchainImageViews;
+        private VkDescriptorPollSize poolSizeInfo;
 
         private StagingBuffer staging;
 
@@ -120,19 +123,6 @@ namespace MafrixEngine.GraphicsWrapper
         private string[] deviceExtensions = { KhrSwapchain.ExtensionName };
 #if DEBUG
         public const bool EnableValidationLayers = true;
-        private string[][] validationLayerNamesPriorityList =
-        {
-            new [] {"VK_LAYER_KHRONOS_validation"},
-            new [] {"VK_LAYER_LUNARG_standard_validation"},
-            new []
-            {
-                "VK_LAYER_LUNARG_parameter_validation",
-                "VK_LAYER_LUNARG_object_tracker",
-                "VK_LAYER_LUNARG_core_validation"
-            }
-        };
-        private string[] validationLayers;
-        private string[] instanceExtensions = { ExtDebugUtils.ExtensionName };
 #else
         public const bool EnableValidationLayers = false;
 #endif
@@ -143,18 +133,8 @@ namespace MafrixEngine.GraphicsWrapper
 
         public VulkanWrapper()
         {
-            //vk = Vk.GetApi();
             window = InitWindow();
             vkContext = new VkContext();
-        }
-
-        private unsafe void MarshalAssignString(out byte* targ, string s)
-        {
-            targ = (byte*) Marshal.StringToHGlobalAnsi(s);
-        }
-        private unsafe void MarshalFreeString(in byte* targ)
-        {
-            Marshal.FreeHGlobal((IntPtr)targ);
         }
 
         public IWindow InitWindow()
@@ -204,8 +184,8 @@ namespace MafrixEngine.GraphicsWrapper
             CreateCommandBuffers();
             CreateSyncObjects();
 
-            var pos = new Vec3(35.0f, 35.0f, 35.0f);
-            var dir = new Vec3(0.0f) - pos;
+            var pos = new Vec3(35.0f, 200.0f, 35.0f);
+            var dir = new Vec3(200.0f, 245.0f, 200.0f) - pos;
             camera = new Camera(new CameraCoordinate(pos, dir, new Vec3(0.0f, -1.0f, 0.0f)),
                             new ProjectInfo(45.0f, (float)swapchainExtent.Width / (float)swapchainExtent.Height));
             startTime = DateTime.Now;
@@ -311,41 +291,40 @@ namespace MafrixEngine.GraphicsWrapper
             var uboptr = stackalloc UniformBufferObject[1];
             uboptr->proj = proj;
             uboptr->view = view;
-            foreach(var mesh in meshes)
+            //foreach(var mesh in meshes)
+            //{
+            //    var offset = index * mesh.gltf.descriptorSetCount * sizeof(UniformBufferObject);
+            //    mesh.gltf.UpdateUniformBuffer(out var modelMatrices);
+            //    void* data = null;
+            //    ulong datasize = (ulong)(Unsafe.SizeOf<UniformBufferObject>());
+            //    var model = Matrix4X4.CreateRotationY<float>(time * mesh.frameRotate);
+            //    for(var i = 0; i < modelMatrices.Length; i++)
+            //    {
+            //        uboptr->model = modelMatrices[i] * mesh.matrix * model;
+            //        var idx = index * mesh.gltf.descriptorSetCount + i;
+            //        vk.MapMemory(device, mesh.uniformMemory[idx], 0, datasize, 0, ref data);
+            //        Unsafe.CopyBlock(data, uboptr, (uint)datasize);
+            //        vk.UnmapMemory(device, mesh.uniformMemory[idx]);
+            //    }
+            //}
+
+            foreach (var mesh in meshes)
             {
-                var offset = index * mesh.gltf.descriptorSetCount * sizeof(UniformBufferObject);
-                mesh.gltf.UpdateUniformBuffer(out var modelMatrices);
+                var descs = mesh.gltf2.DescriptorSetCount;
+                var offset = index * descs * sizeof(UniformBufferObject);
+                mesh.gltf2.UpdateUniformBuffer(out var modelMatrices);
                 void* data = null;
                 ulong datasize = (ulong)(Unsafe.SizeOf<UniformBufferObject>());
                 var model = Matrix4X4.CreateRotationY<float>(time * mesh.frameRotate);
-                for(var i = 0; i < modelMatrices.Length; i++)
+                for (var i = 0; i < modelMatrices.Length; i++)
                 {
                     uboptr->model = modelMatrices[i] * mesh.matrix * model;
-                    var idx = index * mesh.gltf.descriptorSetCount + i;
+                    var idx = index * descs + i;
                     vk.MapMemory(device, mesh.uniformMemory[idx], 0, datasize, 0, ref data);
                     Unsafe.CopyBlock(data, uboptr, (uint)datasize);
                     vk.UnmapMemory(device, mesh.uniformMemory[idx]);
                 }
             }
-        }
-
-        private unsafe string[]? GetOptimalValidationLayers()
-        {
-            uint layerCount = 0;
-            vk.EnumerateInstanceLayerProperties(ref layerCount, null);
-
-            var availableLayers = new LayerProperties[layerCount];
-            vk.EnumerateInstanceLayerProperties(&layerCount, availableLayers);
-
-            var availableLayerNames = availableLayers.Select(availableLayer => Marshal.PtrToStringAnsi((nint)availableLayer.LayerName)).ToArray();
-            foreach(var validationLayerNameSet in validationLayerNamesPriorityList)
-            {
-                if(validationLayerNameSet.All(validationLayerName => availableLayerNames.Contains(validationLayerName)))
-                {
-                    return validationLayerNameSet;
-                }
-            }
-            return null;
         }
 
         private unsafe void CreateSurface()
@@ -665,19 +644,8 @@ namespace MafrixEngine.GraphicsWrapper
             shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit);
             // using some class to simplfy pipeline create
             var pipelineInfos = new PipelineInfo(vk, device, shaderDefines);
-
-            var layoutBindings = pipelineInfos.setLayoutInfo.GetLayoutBindings(0);
-            var layoutInfo = new DescriptorSetLayoutCreateInfo(StructureType.DescriptorSetLayoutCreateInfo);
-            layoutInfo.BindingCount = (uint)layoutBindings.Length;
-            fixed (DescriptorSetLayoutBinding* bindings = layoutBindings)
-            {
-                layoutInfo.PBindings = bindings;
-            }
-            if (vk.CreateDescriptorSetLayout(device, layoutInfo, null, out descriptorSetLayout) != Result.Success)
-            {
-                throw new Exception("failed to create descriptor set layout.");
-            }
-
+            descriptorSetLayout = pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts()[0];
+            poolSizeInfo = new VkDescriptorPollSize(pipelineInfos.setLayoutInfo);
 
             var bindingDescription = Vertex.GetBindingDescription();
             var attributeDescriptions = Vertex.GetAttributeDescriptions();
@@ -700,7 +668,7 @@ namespace MafrixEngine.GraphicsWrapper
             viewport.Width = swapchainExtent.Width;
             viewport.Height = swapchainExtent.Height;
             viewport.MinDepth = 0.0f;
-            viewport.MaxDepth = 1.0f;
+            viewport.MaxDepth = 0.1f;
             var scissor = new Rect2D(default, swapchainExtent);
             var viewportState = new PipelineViewportStateCreateInfo(StructureType.PipelineViewportStateCreateInfo);
             viewportState.ViewportCount = 1;
@@ -738,8 +706,9 @@ namespace MafrixEngine.GraphicsWrapper
             colorBlending.BlendConstants[3] = 0.0f;
 
             var pipelineLayoutInfo = new PipelineLayoutCreateInfo(StructureType.PipelineLayoutCreateInfo);
-            pipelineLayoutInfo.SetLayoutCount = 1;
-            fixed(DescriptorSetLayout* ptr = &descriptorSetLayout)
+            var setLayouts = pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts();
+            pipelineLayoutInfo.SetLayoutCount = (uint)setLayouts.Length;
+            fixed (DescriptorSetLayout* ptr = &setLayouts[0])
             {
                 pipelineLayoutInfo.PSetLayouts = ptr;
             }
@@ -756,7 +725,7 @@ namespace MafrixEngine.GraphicsWrapper
             depthStencil.DepthCompareOp = CompareOp.Less;
             depthStencil.DepthBoundsTestEnable = Vk.False;
             depthStencil.MinDepthBounds = 0.0f;
-            depthStencil.MaxDepthBounds = 100.0f;
+            depthStencil.MaxDepthBounds = 1.0f;
             depthStencil.StencilTestEnable = Vk.False;
 
             var pipelineInfo = new GraphicsPipelineCreateInfo(StructureType.GraphicsPipelineCreateInfo);
@@ -1134,8 +1103,9 @@ namespace MafrixEngine.GraphicsWrapper
         {
             var modelNames = new string[]
             {
-                "Asserts/viking_room/scene.gltf",
-                "Asserts/gaz-66/scene.gltf"
+                //"Asserts/viking_room/scene.gltf",
+                "Asserts/sponza/Sponza.gltf",
+                //"Asserts/gaz-66/scene.gltf"
             };
 
             // load model
@@ -1148,29 +1118,39 @@ namespace MafrixEngine.GraphicsWrapper
                 meshes[i].vertexOffset = 0;
                 meshes[i].vertices = gltf.verticesBuffer;
                 meshes[i].indices = gltf.indicesBuffer;
-                meshes[i].gltf = gltf;
+                //meshes[i].gltf = gltf;
             }
 
-            var totalSize = 0;
-            foreach(var mesh in meshes)
-            {
-                totalSize += mesh.indices.Length;
-            }
-            meshes[0].matrix = Matrix4X4.CreateTranslation<float>(new Vec3(-40, 0, 0));
-            meshes[0].frameRotate = Scalar.DegreesToRadians<float>(90.0f);
-            meshes[1].matrix = Matrix4X4.CreateScale<float>(0.03f);
-            meshes[1].frameRotate = Scalar.DegreesToRadians<float>(77.0f);
+            meshes[0].matrix = Matrix4X4.CreateScale<float>(5.0f) * Matrix4X4.CreateTranslation<float>(new Vec3(-400, 0, 0));
+            meshes[0].frameRotate = Scalar.DegreesToRadians<float>(30.0f);
+            //meshes[1].matrix = Matrix4X4.CreateScale<float>(0.03f);
+            //meshes[1].frameRotate = Scalar.DegreesToRadians<float>(77.0f);
 
-            var files = new string[]
+            var modelPathNames = new ValueTuple<string, string>[]
             {
-                "Asserts/viking_room/textures/viking_room.png",
-                "Asserts/gaz-66/textures/material_baseColor.png"
+                ("Asserts/sponza", "Sponza.gltf"),
+                //("Asserts/gaz-66", "scene.gltf")
             };
-            for(var i = 0; i < meshes.Length; i++)
+            var nodes = new Gltf2RootNode[modelPathNames.Length];
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            for (int i = 0; i < nodes.Length; i++)
             {
-                CreateTextureImage(files[i], out meshes[i].texture, out meshes[i].textureMemory);
-                CreateImageView(meshes[i].texture, mipLevels, Format.R8G8B8A8Srgb, ImageAspectFlags.ColorBit, out meshes[i].textureView);
+                var (path, name) = modelPathNames[i];
+                var loader = new Gltf2Loader(path, name);
+                meshes[i].gltf2 = loader.Parse(vkContext, stCommand, staging);
             }
+
+            //var files = new string[]
+            //{
+            //    "Asserts/sponza/7268504077753552595.jpg",
+            //    //"Asserts/viking_room/textures/viking_room.png",
+            //    "Asserts/gaz-66/textures/material_baseColor.png"
+            //};
+            //for(var i = 0; i < meshes.Length; i++)
+            //{
+            //    CreateTextureImage(files[i], out meshes[i].texture, out meshes[i].textureMemory);
+            //    CreateImageView(meshes[i].texture, mipLevels, Format.R8G8B8A8Srgb, ImageAspectFlags.ColorBit, out meshes[i].textureView);
+            //}
         }
 
         private unsafe void CreateVertexBuffer()
@@ -1220,8 +1200,10 @@ namespace MafrixEngine.GraphicsWrapper
             
             for(var m = 0; m < meshes.Length; m++)
             {
-                var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
-                ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].gltf.descriptorSetCount);
+                var setCount = MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount;
+                ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].gltf2.DescriptorSetCount);
+                //var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
+                //ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].gltf.descriptorSetCount);
                 meshes[m].uniformBuffer = new Buffer[setCount];
                 meshes[m].uniformMemory = new DeviceMemory[setCount];
                 for (int i = 0; i < setCount; i++)
@@ -1236,16 +1218,24 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateDescriptorPool()
         {
-            var poolSize = stackalloc DescriptorPoolSize[2];
-            poolSize[0] = new DescriptorPoolSize(DescriptorType.UniformBuffer, MaxFrameInFlight);
-            poolSize[1] = new DescriptorPoolSize(DescriptorType.CombinedImageSampler, MaxFrameInFlight);
             var poolInfo = new DescriptorPoolCreateInfo(StructureType.DescriptorPoolCreateInfo);
-            poolInfo.PoolSizeCount = 2;
-            poolInfo.PPoolSizes = poolSize;
 
             for(var m = 0; m < meshes.Length; m++)
             {
-                poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].gltf.descriptorSetCount);
+                var poolSize = new DescriptorPoolSize[poolSizeInfo.poolSizes.Length];
+                for (var i = 0; i < poolSize.Length; i++)
+                {
+                    var tmp = poolSizeInfo.poolSizes[i];
+                    poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount));
+                    //poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].gltf.descriptorSetCount));
+                }
+                poolInfo.PoolSizeCount = (uint)poolSize.Length;
+                fixed (DescriptorPoolSize* poolSizePtr = poolSize)
+                {
+                    poolInfo.PPoolSizes = poolSizePtr;
+                }
+                poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount);
+                //poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].gltf.descriptorSetCount);
                 if (vk.CreateDescriptorPool(device, poolInfo, null, out meshes[m].descriptorPool) != Result.Success)
                 {
                     throw new Exception("failed to create descriptor pool.");
@@ -1255,12 +1245,13 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateDescriptorSets()
         {
-            
 
-            var descriptorWrites = stackalloc WriteDescriptorSet[2];
+
+            WriteDescriptorSet[] descriptorWrites = new WriteDescriptorSet[2];
             for(var m = 0; m < meshes.Length; m++)
             {
-                var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
+                var setCount = MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount;
+                //var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
 
                 var layouts = new DescriptorSetLayout[setCount];
                 for (var i = 0; i < setCount; i++)
@@ -1292,28 +1283,33 @@ namespace MafrixEngine.GraphicsWrapper
 
                     var imageInfo = new DescriptorImageInfo();
                     imageInfo.ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
-                    imageInfo.ImageView = meshes[m].textureView;
+                    //imageInfo.ImageView = meshes[m].textureView;
                     imageInfo.Sampler = textureSampler;
 
                     descriptorWrites[0].DstBinding = 0;
                     descriptorWrites[0].DstArrayElement = 0;
                     descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
                     descriptorWrites[0].DescriptorCount = 1;
-                    descriptorWrites[0].PBufferInfo = &bufferInfo;
+                    //descriptorWrites[0].PBufferInfo = &bufferInfo;
 
                     descriptorWrites[1].DstBinding = 1;
                     descriptorWrites[1].DstArrayElement = 0;
                     descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
                     descriptorWrites[1].DescriptorCount = 1;
-                    descriptorWrites[1].PImageInfo = &imageInfo;
+                    //descriptorWrites[1].PImageInfo = &imageInfo;
 
-                    for(var j = 0; j < meshes[m].gltf.descriptorSetCount; j++)
-                    {
-                        bufferInfo.Buffer = meshes[m].uniformBuffer[i * meshes[m].gltf.descriptorSetCount + j];
-                        descriptorWrites[0].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
-                        descriptorWrites[1].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
-                        vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
-                    }
+                    meshes[m].gltf2.UpdateDescriptorSets(
+                        vk, device,
+                        descriptorWrites, imageInfo, bufferInfo,
+                        meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].gltf2.DescriptorSetCount);
+
+                    //for(var j = 0; j < meshes[m].gltf.descriptorSetCount; j++)
+                    //{
+                    //    bufferInfo.Buffer = meshes[m].uniformBuffer[i * meshes[m].gltf.descriptorSetCount + j];
+                    //    descriptorWrites[0].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
+                    //    descriptorWrites[1].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
+                    //    vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
+                    //}
                 }
             }
         }
@@ -1427,7 +1423,8 @@ namespace MafrixEngine.GraphicsWrapper
 
                     void BindDescriptorSets(int nodeIndex)
                     {
-                        var idx = i *meshes[m].gltf.descriptorSetCount + nodeIndex;
+                        var idx = i * meshes[m].gltf2.DescriptorSetCount + nodeIndex;
+                        //var idx = i *meshes[m].gltf.descriptorSetCount + nodeIndex;
                         vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, meshes[m].descriptorSets[idx], 0, null);
                     }
                 }
@@ -1494,8 +1491,8 @@ namespace MafrixEngine.GraphicsWrapper
                 vk.FreeMemory(device, mesh.vertexBufferMemory, null);
                 vk.FreeMemory(device, mesh.deviceMemory, null);
                 vk.DestroyBufferView(device, mesh.bufferView, null);
-                vk.DestroyImageView(device, mesh.textureView, null);
-                vk.DestroyImage(device, mesh.texture, null);
+                //vk.DestroyImageView(device, mesh.textureView, null);
+                //vk.DestroyImage(device, mesh.texture, null);
                 vk.DestroyBuffer(device, mesh.vertexBuffer, null);
                 vk.DestroyBuffer(device, mesh.indicesBuffer, null);
                 foreach (var memory in mesh.uniformMemory)

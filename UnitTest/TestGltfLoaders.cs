@@ -21,6 +21,7 @@ using Vertex = MafrixEngine.ModelLoaders.Vertex;
 //using MafrixEngine.ModelLoaders;
 using Image = SixLabors.ImageSharp.Image;
 using Node = Silk.NET.Assimp.Node;
+using MafrixEngine.ModelLoaders;
 
 namespace UnitTest
 {
@@ -65,7 +66,7 @@ namespace UnitTest
                             Vertex vertex = new Vertex
                             {
                                 pos = new Vector3D<float>(position.X, position.Y, position.Z),
-                                color = new Vector3D<float>(1, 1, 1),
+                                normal = new Vector3D<float>(1, 1, 1),
                                 //Flip Y for OBJ in Vulkan
                                 texCoord = new Vector2D<float>(texture.X, 1.0f - texture.Y)
                             };
@@ -143,6 +144,24 @@ namespace UnitTest
                     }
                 }
             }
+        }
+
+        private string gltf3Path = @"Asserts/sponza";
+        private string gltf3Name = @"Sponza.gltf";
+        [Fact]
+        public unsafe void TestGltf2Loader2()
+        {
+            var path = Directory.GetCurrentDirectory();
+            var filename = Path.Combine(path, gltf3Name);
+            Assert.True(Directory.Exists(path));
+
+            var gltf = new Gltf2Loader(gltf3Path, gltf3Name);
+            Assert.NotNull(gltf);
+            //var rootnode = gltf.Parse();
+            //Assert.NotEmpty(gltf.vertices);
+            //Assert.NotEmpty(gltf.indices);
+            //Assert.Single(rootnode.nodes);
+            //Assert.Single(rootnode.meshes);
         }
 
         [Fact]

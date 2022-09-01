@@ -29,7 +29,7 @@ namespace MafrixEngine.Cameras
         public float ratio;
         public float near;
         public float far;
-        public ProjectInfo(float viewDegrees, float ratio, float far = 10000f, float near = 0.1f)
+        public ProjectInfo(float viewDegrees, float ratio, float far = 20000f, float near = 1f)
         {
             viewRadians = Scalar.DegreesToRadians(viewDegrees);
             this.ratio = ratio;

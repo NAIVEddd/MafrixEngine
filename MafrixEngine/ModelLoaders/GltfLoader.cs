@@ -37,9 +37,9 @@ namespace MafrixEngine.ModelLoaders
     public struct Vertex
     {
         public Vec3 pos;
-        public Vec3 color;
+        public Vec3 normal;
         public Vec2 texCoord;
-        public Vertex(Vec3 p, Vec3 c, Vec2 t) => (pos, color, texCoord) = (p, c, t);
+        public Vertex(Vec3 p, Vec3 n, Vec2 t) => (pos, normal, texCoord) = (p, n, t);
         public unsafe static VertexInputBindingDescription GetBindingDescription()
         {
             var bindingDescription = new VertexInputBindingDescription();
@@ -59,7 +59,7 @@ namespace MafrixEngine.ModelLoaders
             attributeDescriptions[1].Binding = 0;
             attributeDescriptions[1].Location = 1;
             attributeDescriptions[1].Format = Format.R32G32B32Sfloat;
-            attributeDescriptions[1].Offset = (uint)Marshal.OffsetOf<Vertex>("color").ToInt32();
+            attributeDescriptions[1].Offset = (uint)Marshal.OffsetOf<Vertex>("normal").ToInt32();
             attributeDescriptions[2].Binding = 0;
             attributeDescriptions[2].Location = 2;
             attributeDescriptions[2].Format = Format.R32G32Sfloat;
@@ -115,7 +115,7 @@ namespace MafrixEngine.ModelLoaders
                     var vertex = new Vertex
                     {
                         pos = new Vec3(position.X, position.Y, position.Z),
-                        color = new Vec3(normal.X, normal.Y, normal.Z),
+                        normal = new Vec3(normal.X, normal.Y, normal.Z),
                         //Flip Y for OBJ in Vulkan
                         texCoord = new Vec2(texture.X, 1.0f - texture.Y)
                     };
@@ -155,12 +155,12 @@ namespace MafrixEngine.ModelLoaders
                     var index = face.MIndices[j];
                     var position = mesh->MVertices[index];
                     var normal = mesh->MNormals[index];
-                    var texture = mesh->MTextureCoords[(int)texIdx][index];
+                    var texture = mesh->MTextureCoords[0][index];
 
                     var vertex = new Vertex
                     {
                         pos = new Vec3(position.X, position.Y, position.Z),
-                        color = new Vec3(normal.X, normal.Y, normal.Z),
+                        normal = new Vec3(normal.X, normal.Y, normal.Z),
                         //Flip Y for OBJ in Vulkan
                         texCoord = new Vec2(texture.X, 1.0f - texture.Y)
                     };

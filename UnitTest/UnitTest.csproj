@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MafrixEngine\MafrixEngine.csproj" />
+    <ProjectReference Include="..\ThirdParty\ThirdParty.csproj" />
   </ItemGroup>
 
   <ItemGroup>

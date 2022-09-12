@@ -17,6 +17,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Image = SixLabors.ImageSharp.Image;
 using glTFLoader;
+using MafrixEngine.Source.Interface;
 
 namespace MafrixEngine.ModelLoaders
 {
@@ -34,11 +35,16 @@ namespace MafrixEngine.ModelLoaders
         public UniformBufferObject(Mat4 m, Mat4 v, Mat4 p) => (model, view, proj) = (m, v, p);
     }
 
-    public struct Vertex
+    public struct Vertex : IVertexData
     {
         public Vec3 pos;
         public Vec3 normal;
         public Vec2 texCoord;
+
+        public VertexInputBindingDescription BindingDescription => GetBindingDescription();
+
+        public VertexInputAttributeDescription[] AttributeDescriptions => GetAttributeDescriptions();
+
         public Vertex(Vec3 p, Vec3 n, Vec2 t) => (pos, normal, texCoord) = (p, n, t);
         public unsafe static VertexInputBindingDescription GetBindingDescription()
         {

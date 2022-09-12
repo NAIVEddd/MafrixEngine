@@ -58,7 +58,6 @@ namespace MafrixEngine.GraphicsWrapper
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer, Action<int> action)
         {
-            //gltf.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
             gltf2.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
         }
 
@@ -291,22 +290,6 @@ namespace MafrixEngine.GraphicsWrapper
             var uboptr = stackalloc UniformBufferObject[1];
             uboptr->proj = proj;
             uboptr->view = view;
-            //foreach(var mesh in meshes)
-            //{
-            //    var offset = index * mesh.gltf.descriptorSetCount * sizeof(UniformBufferObject);
-            //    mesh.gltf.UpdateUniformBuffer(out var modelMatrices);
-            //    void* data = null;
-            //    ulong datasize = (ulong)(Unsafe.SizeOf<UniformBufferObject>());
-            //    var model = Matrix4X4.CreateRotationY<float>(time * mesh.frameRotate);
-            //    for(var i = 0; i < modelMatrices.Length; i++)
-            //    {
-            //        uboptr->model = modelMatrices[i] * mesh.matrix * model;
-            //        var idx = index * mesh.gltf.descriptorSetCount + i;
-            //        vk.MapMemory(device, mesh.uniformMemory[idx], 0, datasize, 0, ref data);
-            //        Unsafe.CopyBlock(data, uboptr, (uint)datasize);
-            //        vk.UnmapMemory(device, mesh.uniformMemory[idx]);
-            //    }
-            //}
 
             foreach (var mesh in meshes)
             {
@@ -647,109 +630,26 @@ namespace MafrixEngine.GraphicsWrapper
             descriptorSetLayout = pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts()[0];
             poolSizeInfo = new VkDescriptorPollSize(pipelineInfos.setLayoutInfo);
 
-            var bindingDescription = Vertex.GetBindingDescription();
-            var attributeDescriptions = Vertex.GetAttributeDescriptions();
-
-            var vertexInputInfo = new PipelineVertexInputStateCreateInfo(StructureType.PipelineVertexInputStateCreateInfo);
-            vertexInputInfo.VertexBindingDescriptionCount = 1;
-            vertexInputInfo.PVertexBindingDescriptions = &bindingDescription;
-            vertexInputInfo.VertexAttributeDescriptionCount = (uint)attributeDescriptions.Length;
-            fixed(VertexInputAttributeDescription* attributes = attributeDescriptions)
-            {
-                vertexInputInfo.PVertexAttributeDescriptions = attributes;
-            }
-            var inputAssembly = new PipelineInputAssemblyStateCreateInfo(StructureType.PipelineInputAssemblyStateCreateInfo);
-            inputAssembly.Topology = PrimitiveTopology.TriangleList;
-            inputAssembly.PrimitiveRestartEnable = Vk.False;
-
-            var viewport = new Viewport();
-            viewport.X = 0.0f;
-            viewport.Y = 0.0f;
-            viewport.Width = swapchainExtent.Width;
-            viewport.Height = swapchainExtent.Height;
-            viewport.MinDepth = 0.0f;
-            viewport.MaxDepth = 0.1f;
-            var scissor = new Rect2D(default, swapchainExtent);
-            var viewportState = new PipelineViewportStateCreateInfo(StructureType.PipelineViewportStateCreateInfo);
-            viewportState.ViewportCount = 1;
-            viewportState.PViewports = &viewport;
-            viewportState.ScissorCount = 1;
-            viewportState.PScissors = &scissor;
-
-            var rasterizer = new PipelineRasterizationStateCreateInfo(StructureType.PipelineRasterizationStateCreateInfo);
-            rasterizer.DepthClampEnable = Vk.False;
-            rasterizer.RasterizerDiscardEnable = Vk.False;
-            rasterizer.PolygonMode = PolygonMode.Fill;
-            rasterizer.LineWidth = 1.0f;
-            rasterizer.CullMode = CullModeFlags.None;
-            rasterizer.FrontFace = FrontFace.CounterClockwise;
-            rasterizer.DepthBiasEnable = Vk.False;
-            var multisampling = new PipelineMultisampleStateCreateInfo(StructureType.PipelineMultisampleStateCreateInfo);
-            multisampling.SampleShadingEnable = Vk.False;
-            multisampling.RasterizationSamples = SampleCountFlags.Count1Bit;
-
-            var colorBlendAttachment = new PipelineColorBlendAttachmentState();
-            colorBlendAttachment.ColorWriteMask =
-                    ColorComponentFlags.RBit |
-                    ColorComponentFlags.GBit |
-                    ColorComponentFlags.BBit |
-                    ColorComponentFlags.ABit;
-            colorBlendAttachment.BlendEnable = Vk.False;
-            var colorBlending = new PipelineColorBlendStateCreateInfo(StructureType.PipelineColorBlendStateCreateInfo);
-            colorBlending.LogicOpEnable = Vk.False;
-            colorBlending.LogicOp = LogicOp.Copy;
-            colorBlending.AttachmentCount = 1;
-            colorBlending.PAttachments = &colorBlendAttachment;
-            colorBlending.BlendConstants[0] = 0.0f;
-            colorBlending.BlendConstants[1] = 0.0f;
-            colorBlending.BlendConstants[2] = 0.0f;
-            colorBlending.BlendConstants[3] = 0.0f;
-
-            var pipelineLayoutInfo = new PipelineLayoutCreateInfo(StructureType.PipelineLayoutCreateInfo);
-            var setLayouts = pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts();
-            pipelineLayoutInfo.SetLayoutCount = (uint)setLayouts.Length;
-            fixed (DescriptorSetLayout* ptr = &setLayouts[0])
-            {
-                pipelineLayoutInfo.PSetLayouts = ptr;
-            }
-            pipelineLayoutInfo.PushConstantRangeCount = 0;
-
-            if(vk.CreatePipelineLayout(device, in pipelineLayoutInfo, null, out pipelineLayout) != Result.Success)
-            {
-                throw new Exception("failed to create pipeline layout!");
-            }
-
-            var depthStencil = new PipelineDepthStencilStateCreateInfo(StructureType.PipelineDepthStencilStateCreateInfo);
-            depthStencil.DepthTestEnable = Vk.True;
-            depthStencil.DepthWriteEnable = Vk.True;
-            depthStencil.DepthCompareOp = CompareOp.Less;
-            depthStencil.DepthBoundsTestEnable = Vk.False;
-            depthStencil.MinDepthBounds = 0.0f;
-            depthStencil.MaxDepthBounds = 1.0f;
-            depthStencil.StencilTestEnable = Vk.False;
-
-            var pipelineInfo = new GraphicsPipelineCreateInfo(StructureType.GraphicsPipelineCreateInfo);
-            pipelineInfo.PVertexInputState = &vertexInputInfo;
-            pipelineInfo.PInputAssemblyState = &inputAssembly;
-            pipelineInfo.PViewportState = &viewportState;
-            pipelineInfo.PRasterizationState = &rasterizer;
-            pipelineInfo.PMultisampleState = &multisampling;
-            pipelineInfo.PColorBlendState = &colorBlending;
-            pipelineInfo.PDepthStencilState = &depthStencil;
-            pipelineInfo.Layout = pipelineLayout;
-            pipelineInfo.RenderPass = renderPass;
-            pipelineInfo.Subpass = 0;
-            pipelineInfo.BasePipelineHandle = default;
-            fixed(PipelineShaderStageCreateInfo* stagePtr = pipelineInfos.pipelineShaderStageCreateInfos)
-            {
-                pipelineInfo.StageCount = (uint)pipelineInfos.pipelineShaderStageCreateInfos.Length;
-                pipelineInfo.PStages = stagePtr;
-            }
-
-            if (vk.CreateGraphicsPipelines(device, default, 1, in pipelineInfo, null, out graphicsPipeline) != Result.Success)
-            {
-                throw new Exception("failed to create graphics pipeline.");
-            }
+            VkPipelineBuilder pipelineBuilder = new VkPipelineBuilder(vk, device);
+            pipelineBuilder.BindInputAssemblyState(PrimitiveTopology.TriangleList);
+            pipelineBuilder.BindViewportState(swapchainExtent);
+            pipelineBuilder.BindRasterizationState(PolygonMode.Fill, CullModeFlags.None);
+            pipelineBuilder.BindMultisampleState();
+            pipelineBuilder.BindDepthStencilState(true, true, CompareOp.Less);
+            var masks = new VkPipelineBuilder.ColorBlendMask[1];
+            masks[0] = new VkPipelineBuilder.ColorBlendMask(
+                ColorComponentFlags.RBit |
+                ColorComponentFlags.GBit |
+                ColorComponentFlags.BBit |
+                ColorComponentFlags.ABit, false);
+            pipelineBuilder.BindColorBlendState(masks);
+            pipelineBuilder.BindVertexInput<Vertex>(default);
+            pipelineBuilder.BindRenderPass(renderPass, 0);
+            pipelineBuilder.BindPlipelineLayout(pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts());
+            pipelineBuilder.BindShaderStages(pipelineInfos.pipelineShaderStageCreateInfos);
+            pipelineBuilder.Build();
+            pipelineLayout = pipelineBuilder.pipelineLayout;
+            graphicsPipeline = pipelineBuilder.pipeline;
         }
 
         private unsafe void CreateBuffer(ulong size, BufferUsageFlags usage,
@@ -1139,18 +1039,6 @@ namespace MafrixEngine.GraphicsWrapper
                 var loader = new Gltf2Loader(path, name);
                 meshes[i].gltf2 = loader.Parse(vkContext, stCommand, staging);
             }
-
-            //var files = new string[]
-            //{
-            //    "Asserts/sponza/7268504077753552595.jpg",
-            //    //"Asserts/viking_room/textures/viking_room.png",
-            //    "Asserts/gaz-66/textures/material_baseColor.png"
-            //};
-            //for(var i = 0; i < meshes.Length; i++)
-            //{
-            //    CreateTextureImage(files[i], out meshes[i].texture, out meshes[i].textureMemory);
-            //    CreateImageView(meshes[i].texture, mipLevels, Format.R8G8B8A8Srgb, ImageAspectFlags.ColorBit, out meshes[i].textureView);
-            //}
         }
 
         private unsafe void CreateVertexBuffer()
@@ -1202,8 +1090,6 @@ namespace MafrixEngine.GraphicsWrapper
             {
                 var setCount = MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount;
                 ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].gltf2.DescriptorSetCount);
-                //var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
-                //ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].gltf.descriptorSetCount);
                 meshes[m].uniformBuffer = new Buffer[setCount];
                 meshes[m].uniformMemory = new DeviceMemory[setCount];
                 for (int i = 0; i < setCount; i++)
@@ -1227,7 +1113,6 @@ namespace MafrixEngine.GraphicsWrapper
                 {
                     var tmp = poolSizeInfo.poolSizes[i];
                     poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount));
-                    //poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].gltf.descriptorSetCount));
                 }
                 poolInfo.PoolSizeCount = (uint)poolSize.Length;
                 fixed (DescriptorPoolSize* poolSizePtr = poolSize)
@@ -1235,7 +1120,6 @@ namespace MafrixEngine.GraphicsWrapper
                     poolInfo.PPoolSizes = poolSizePtr;
                 }
                 poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount);
-                //poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].gltf.descriptorSetCount);
                 if (vk.CreateDescriptorPool(device, poolInfo, null, out meshes[m].descriptorPool) != Result.Success)
                 {
                     throw new Exception("failed to create descriptor pool.");
@@ -1245,13 +1129,10 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateDescriptorSets()
         {
-
-
             WriteDescriptorSet[] descriptorWrites = new WriteDescriptorSet[2];
             for(var m = 0; m < meshes.Length; m++)
             {
                 var setCount = MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount;
-                //var setCount = MaxFrameInFlight * meshes[m].gltf.descriptorSetCount;
 
                 var layouts = new DescriptorSetLayout[setCount];
                 for (var i = 0; i < setCount; i++)
@@ -1302,14 +1183,6 @@ namespace MafrixEngine.GraphicsWrapper
                         vk, device,
                         descriptorWrites, imageInfo, bufferInfo,
                         meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].gltf2.DescriptorSetCount);
-
-                    //for(var j = 0; j < meshes[m].gltf.descriptorSetCount; j++)
-                    //{
-                    //    bufferInfo.Buffer = meshes[m].uniformBuffer[i * meshes[m].gltf.descriptorSetCount + j];
-                    //    descriptorWrites[0].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
-                    //    descriptorWrites[1].DstSet = meshes[m].descriptorSets[i * meshes[m].gltf.descriptorSetCount + j];
-                    //    vk.UpdateDescriptorSets(device, 2, descriptorWrites, 0, null);
-                    //}
                 }
             }
         }
@@ -1418,13 +1291,11 @@ namespace MafrixEngine.GraphicsWrapper
 
                 for (var m = 0; m < meshes.Length; m++)
                 {
-                    //vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, meshes[m].descriptorSets[i], 0, null);
                     meshes[m].BindCommand(vk, commandBuffers[i], BindDescriptorSets);
 
                     void BindDescriptorSets(int nodeIndex)
                     {
                         var idx = i * meshes[m].gltf2.DescriptorSetCount + nodeIndex;
-                        //var idx = i *meshes[m].gltf.descriptorSetCount + nodeIndex;
                         vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, meshes[m].descriptorSets[idx], 0, null);
                     }
                 }
@@ -1491,8 +1362,6 @@ namespace MafrixEngine.GraphicsWrapper
                 vk.FreeMemory(device, mesh.vertexBufferMemory, null);
                 vk.FreeMemory(device, mesh.deviceMemory, null);
                 vk.DestroyBufferView(device, mesh.bufferView, null);
-                //vk.DestroyImageView(device, mesh.textureView, null);
-                //vk.DestroyImage(device, mesh.texture, null);
                 vk.DestroyBuffer(device, mesh.vertexBuffer, null);
                 vk.DestroyBuffer(device, mesh.indicesBuffer, null);
                 foreach (var memory in mesh.uniformMemory)

@@ -115,6 +115,8 @@ namespace MafrixEngine.GraphicsWrapper
         //}
         //VkGraphicsPipelineCreateInfo;
 /// </summary>
+/// 
+/// TODO: use raw memory to save all needed infomation.
 public class VkPipelineBuilder
     {
         private Vk vk;
@@ -327,7 +329,6 @@ public class VkPipelineBuilder
         {
             setLayouts = setLayouts_;
             var pipelineLayoutInfo = new PipelineLayoutCreateInfo(StructureType.PipelineLayoutCreateInfo);
-            //var setLayouts = pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts();
             pipelineLayoutInfo.SetLayoutCount = (uint)setLayouts.Length;
             fixed (DescriptorSetLayout* ptr = setLayouts)
             {
@@ -339,7 +340,6 @@ public class VkPipelineBuilder
             {
                 throw new Exception("failed to create pipeline layout!");
             }
-            //pipelineLayout = layout;
             return this;
         }
         private PipelineShaderStageCreateInfo[] pipelineShaderStageCreateInfos;

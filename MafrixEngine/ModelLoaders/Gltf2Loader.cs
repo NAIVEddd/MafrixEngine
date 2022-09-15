@@ -321,31 +321,36 @@ namespace MafrixEngine.ModelLoaders
                     }
                 }
                 loader.VertexCount += (uint)loader.vertexMap.Count;
-                loader.IndexCount += indexCount;
+                loader.IndexCount = (uint)loader.indices.Count;
             }
             else
             {
                 var primitive = mesh.Primitives[index];
                 materialIndex = primitive.Material!.Value;
-                vertexStart = (uint)loader.vertices.Count;
-                indexStart = (uint)loader.indices.Count;
+                vertexStart = (uint)loader.VertexCount;
+                indexStart = (uint)loader.IndexCount;
                 var vertexs = new VertexBuffer(loader, gltf, primitive);
-                indexCount = (uint)vertexs.Count;
+                loader.vertexMap.Clear();
+                var verticesList = new List<Vertex>();
+                var indicesList = new List<uint>();
                 foreach (var vertex in vertexs.GetVertex())
                 {
                     if (loader.vertexMap.TryGetValue(vertex, out var meshIndex))
                     {
-                        loader.indices.Add(meshIndex);
+                        indicesList.Add(meshIndex);
                     }
                     else
                     {
-                        loader.indices.Add((uint)loader.vertices.Count);
-                        loader.vertexMap[vertex] = (uint)loader.vertices.Count;
-                        loader.vertices.Add(vertex);
+                        indicesList.Add((uint)verticesList.Count);
+                        loader.vertexMap[vertex] = (uint)verticesList.Count;
+                        verticesList.Add(vertex);
                     }
                 }
-                loader.VertexCount += (uint)loader.vertices.Count;
+                loader.vertices.AddRange(verticesList);
+                loader.indices.AddRange(indicesList);
+                loader.VertexCount = (uint)loader.vertices.Count;
                 loader.IndexCount = (uint)loader.indices.Count;
+                indexCount = loader.IndexCount - indexStart;
             }
         }
     }

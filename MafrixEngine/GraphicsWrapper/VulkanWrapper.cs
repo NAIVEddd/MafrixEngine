@@ -17,10 +17,12 @@ using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
 using MafrixEngine.ModelLoaders;
 using MafrixEngine.Cameras;
+using MafrixEngine.Source.Interface;
 
 using Image = Silk.NET.Vulkan.Image;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using SlImage = SixLabors.ImageSharp.Image;
+using glTFLoader.Schema;
 
 namespace MafrixEngine.GraphicsWrapper
 {
@@ -28,21 +30,14 @@ namespace MafrixEngine.GraphicsWrapper
     using Vec2 = Vector2D<float>;
     using Vec3 = Vector3D<float>;
     using Mat4 = Matrix4X4<float>;
+    using Camera = Cameras.Camera;
+    using Sampler = Silk.NET.Vulkan.Sampler;
 
-    public struct Mesh : IDisposable
+    public struct Mesh : IRenderable, IDisposable
     {
         public UniformBufferObject matrices;
-        public Image texture;
-        public ImageView textureView;
-        public DeviceMemory textureMemory;
         public Buffer[] uniformBuffer;
         public DeviceMemory[] uniformMemory;
-        public BufferView bufferView;
-        public DeviceMemory deviceMemory;
-        public DescriptorSet descriptorSet;
-        public UInt32 firstIndex;
-        public UInt32 instanceCount;
-        public Int32 vertexOffset;
         public Vertex[] vertices;
         public UInt32[] indices;
         public Buffer vertexBuffer;
@@ -53,16 +48,51 @@ namespace MafrixEngine.GraphicsWrapper
         public DescriptorSet[] descriptorSets;
         public Mat4 matrix;
         public float frameRotate;
-        public GltfLoader gltf;
         public Gltf2RootNode gltf2;
+
+        private Vk vk;
+        private Device device;
+        public Mesh(Vk vk, Device device)
+        {
+            this.vk = vk;
+            this.device = device;
+            matrices = default;
+            uniformBuffer = default;
+            uniformMemory = default;
+            vertices = default;
+            indices = default;
+            vertexBuffer = default;
+            vertexBufferMemory = default;
+            indicesBuffer = default;
+            indiceBufferMemory = default;
+            descriptorPool = default;
+            descriptorSets = default;
+            matrix = default;
+            frameRotate = default;
+            gltf2 = default;
+        }
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer, Action<int> action)
         {
             gltf2.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
         }
 
-        public void Dispose()
+        public unsafe void Dispose()
         {
+            vk.FreeMemory(device, indiceBufferMemory, null);
+            vk.FreeMemory(device, vertexBufferMemory, null);
+            vk.DestroyBuffer(device, vertexBuffer, null);
+            vk.DestroyBuffer(device, indicesBuffer, null);
+            foreach (var memory in uniformMemory)
+            {
+                vk.FreeMemory(device, memory, null);
+            }
+            foreach (var buffer in uniformBuffer)
+            {
+                vk.DestroyBuffer(device, buffer, null);
+            }
+            vk.DestroyDescriptorPool(device, descriptorPool, null);
+
             gltf2.Dispose();
         }
     }
@@ -182,6 +212,14 @@ namespace MafrixEngine.GraphicsWrapper
             CreateDescriptorSets();
             CreateCommandBuffers();
             CreateSyncObjects();
+
+            for (int i = 0; i < meshes.Length; i++)
+            {
+                meshes[i].vertices = Array.Empty<Vertex>();
+                meshes[i].indices = Array.Empty<uint>();
+                meshes[i].gltf2.vertices = Array.Empty<Vertex>();
+                meshes[i].gltf2.indices = Array.Empty<uint>();
+            }
 
             var pos = new Vec3(35.0f, 200.0f, 35.0f);
             var dir = new Vec3(200.0f, 245.0f, 200.0f) - pos;
@@ -1001,44 +1039,29 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void LoadModel()
         {
-            var modelNames = new string[]
+            var modelPathNames = new ValueTuple<string, string>[]
             {
-                //"Asserts/viking_room/scene.gltf",
-                "Asserts/sponza/Sponza.gltf",
-                //"Asserts/gaz-66/scene.gltf"
+                ("Asserts/sponza", "Sponza.gltf"),
+                //("Asserts/gaz-66", "scene.gltf")
             };
 
             // load model
-            meshes = new Mesh[modelNames.Length];
-            for(var i = 0; i < modelNames.Length; i++)
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            meshes = new Mesh[modelPathNames.Length];
+            for (var i = 0; i < modelPathNames.Length; i++)
             {
-                var gltf = new GltfLoader(modelNames[i]);
-                meshes[i].firstIndex = 0;
-                meshes[i].instanceCount = (UInt32)gltf.indicesBuffer.Length;
-                meshes[i].vertexOffset = 0;
-                meshes[i].vertices = gltf.verticesBuffer;
-                meshes[i].indices = gltf.indicesBuffer;
-                //meshes[i].gltf = gltf;
+                meshes[i] = new Mesh(vk, device);
+                var (path, name) = modelPathNames[i];
+                var loader = new Gltf2Loader(path, name);
+                meshes[i].gltf2 = loader.Parse(vkContext, stCommand, staging);
+                meshes[i].vertices = meshes[i].gltf2.vertices;
+                meshes[i].indices = meshes[i].gltf2.indices;
             }
 
             meshes[0].matrix = Matrix4X4.CreateScale<float>(5.0f) * Matrix4X4.CreateTranslation<float>(new Vec3(-400, 0, 0));
             meshes[0].frameRotate = Scalar.DegreesToRadians<float>(30.0f);
             //meshes[1].matrix = Matrix4X4.CreateScale<float>(0.03f);
             //meshes[1].frameRotate = Scalar.DegreesToRadians<float>(77.0f);
-
-            var modelPathNames = new ValueTuple<string, string>[]
-            {
-                ("Asserts/sponza", "Sponza.gltf"),
-                //("Asserts/gaz-66", "scene.gltf")
-            };
-            var nodes = new Gltf2RootNode[modelPathNames.Length];
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-            for (int i = 0; i < nodes.Length; i++)
-            {
-                var (path, name) = modelPathNames[i];
-                var loader = new Gltf2Loader(path, name);
-                meshes[i].gltf2 = loader.Parse(vkContext, stCommand, staging);
-            }
         }
 
         private unsafe void CreateVertexBuffer()
@@ -1357,23 +1380,6 @@ namespace MafrixEngine.GraphicsWrapper
 
             foreach(var mesh in meshes)
             {
-                vk.FreeMemory(device, mesh.indiceBufferMemory, null);
-                vk.FreeMemory(device, mesh.textureMemory, null);
-                vk.FreeMemory(device, mesh.vertexBufferMemory, null);
-                vk.FreeMemory(device, mesh.deviceMemory, null);
-                vk.DestroyBufferView(device, mesh.bufferView, null);
-                vk.DestroyBuffer(device, mesh.vertexBuffer, null);
-                vk.DestroyBuffer(device, mesh.indicesBuffer, null);
-                foreach (var memory in mesh.uniformMemory)
-                {
-                    vk.FreeMemory(device, memory, null);
-                }
-                foreach (var buffer in mesh.uniformBuffer)
-                {
-                    vk.DestroyBuffer(device, buffer, null);
-                }
-                vk.DestroyDescriptorPool(device, mesh.descriptorPool, null);
-
                 mesh.Dispose();
             }
 

@@ -279,12 +279,18 @@ namespace MafrixEngine.ModelLoaders
     public class Gltf2Material
     {
         public Gltf2Texture baseTexture;
+        public Gltf2Texture metallicTexture;
+        public Gltf2Texture normalTexture;
 
         public Gltf2Material(Gltf2Loader loader, Gltf gltf, int index, Gltf2Texture[] textures)
         {
             var material = gltf.Materials[index];
             var textureinfo = material.PbrMetallicRoughness.BaseColorTexture;
             baseTexture = textures[textureinfo!.Index];
+            var metallicInfo = material.PbrMetallicRoughness.MetallicRoughnessTexture;
+            metallicTexture = metallicInfo != null? textures[metallicInfo!.Index] : baseTexture;
+            var normalInfo = material.NormalTexture;
+            normalTexture = normalInfo != null? textures[normalInfo!.Index] : baseTexture;
         }
     }
 
@@ -460,17 +466,20 @@ namespace MafrixEngine.ModelLoaders
 
         public unsafe void UpdateDescriptorSets(Vk vk, Device device,
             WriteDescriptorSet[] descriptorWrites,
-            DescriptorImageInfo imageInfo,
+            DescriptorImageInfo[] imageInfo,
             DescriptorBufferInfo bufferInfo,
             DescriptorSet[] descriptorSets, VulkanBuffer[] buffer, int start)
         {
             descriptorWrites[0].PBufferInfo = &bufferInfo;
-            descriptorWrites[1].PImageInfo = &imageInfo;
-            foreach (var node in nodes)
+            fixed(DescriptorImageInfo* pimageInfo = imageInfo)
             {
-                UpdateNodeDescriptorSets(vk, device, node,
-                        descriptorWrites, ref imageInfo, ref bufferInfo,
-                        descriptorSets, buffer, ref start);
+                descriptorWrites[1].PImageInfo = pimageInfo;
+                foreach (var node in nodes)
+                {
+                    UpdateNodeDescriptorSets(vk, device, node,
+                            descriptorWrites, imageInfo, ref bufferInfo,
+                            descriptorSets, buffer, ref start);
+                }
             }
             
         }
@@ -478,7 +487,7 @@ namespace MafrixEngine.ModelLoaders
         private unsafe void UpdateNodeDescriptorSets(Vk vk, Device device,
             Gltf2Node node,
             WriteDescriptorSet[] descriptorWrites,
-            ref DescriptorImageInfo imageInfo,
+            DescriptorImageInfo[] imageInfo,
             ref DescriptorBufferInfo bufferInfo,
             DescriptorSet[] descriptorSets, VulkanBuffer[] buffer, ref int offset)
         {
@@ -492,7 +501,9 @@ namespace MafrixEngine.ModelLoaders
                     var material = materials[prim.materialIndex];
 
                     bufferInfo.Buffer = buffer[offset + i];
-                    imageInfo.ImageView = material.baseTexture.imageView;
+                    imageInfo[0].ImageView = material.baseTexture.imageView;
+                    imageInfo[1].ImageView = material.metallicTexture.imageView;
+                    imageInfo[2].ImageView = material.normalTexture.imageView;
                     descriptorWrites[0].DstSet = descriptorSets[offset + i];
                     descriptorWrites[1].DstSet = descriptorSets[offset + i];
                     fixed (WriteDescriptorSet* descPtr = descriptorWrites)
@@ -508,7 +519,7 @@ namespace MafrixEngine.ModelLoaders
                 foreach (var child in node.childrens)
                 {
                     UpdateNodeDescriptorSets(vk, device, nodes[child],
-                        descriptorWrites, ref imageInfo, ref bufferInfo,
+                        descriptorWrites, imageInfo, ref bufferInfo,
                         descriptorSets, buffer, ref offset);
                 }
             }

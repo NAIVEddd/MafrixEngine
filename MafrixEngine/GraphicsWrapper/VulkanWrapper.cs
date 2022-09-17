@@ -1185,22 +1185,23 @@ namespace MafrixEngine.GraphicsWrapper
                     bufferInfo.Offset = 0;
                     bufferInfo.Range = (ulong)Unsafe.SizeOf<UniformBufferObject>();
 
-                    var imageInfo = new DescriptorImageInfo();
-                    imageInfo.ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
-                    //imageInfo.ImageView = meshes[m].textureView;
-                    imageInfo.Sampler = textureSampler;
+                    var imageInfo = new DescriptorImageInfo[3];
+                    imageInfo[0].ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
+                    imageInfo[0].Sampler = textureSampler;
+                    imageInfo[1].ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
+                    imageInfo[1].Sampler = textureSampler;
+                    imageInfo[2].ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
+                    imageInfo[2].Sampler = textureSampler;
 
                     descriptorWrites[0].DstBinding = 0;
                     descriptorWrites[0].DstArrayElement = 0;
                     descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
                     descriptorWrites[0].DescriptorCount = 1;
-                    //descriptorWrites[0].PBufferInfo = &bufferInfo;
 
                     descriptorWrites[1].DstBinding = 1;
                     descriptorWrites[1].DstArrayElement = 0;
                     descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
-                    descriptorWrites[1].DescriptorCount = 1;
-                    //descriptorWrites[1].PImageInfo = &imageInfo;
+                    descriptorWrites[1].DescriptorCount = (uint)imageInfo.Length;
 
                     meshes[m].gltf2.UpdateDescriptorSets(
                         vk, device,

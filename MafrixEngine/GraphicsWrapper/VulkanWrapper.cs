@@ -23,6 +23,8 @@ using Image = Silk.NET.Vulkan.Image;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
 using SlImage = SixLabors.ImageSharp.Image;
 using glTFLoader.Schema;
+using Silk.NET.Input;
+using MafrixEngine.Input;
 
 namespace MafrixEngine.GraphicsWrapper
 {
@@ -97,7 +99,7 @@ namespace MafrixEngine.GraphicsWrapper
         }
     }
 
-    public class VulkanWrapper : IDisposable
+    public class VulkanWrapper : IDisposable //, IRender
     {
         public Camera camera;
 
@@ -160,10 +162,17 @@ namespace MafrixEngine.GraphicsWrapper
             return Marshal.SizeOf<T>() * array.Length;
         }
 
+        public HardwareInput input;
+        private KeyboardMapping kbMap;
+        private MouseMapping mouseMap;
+
         public VulkanWrapper()
         {
             window = InitWindow();
             vkContext = new VkContext();
+            input = new HardwareInput(InitInput());
+            kbMap = new KeyboardMapping(input.inputContext.Keyboards[0]);
+            mouseMap = new MouseMapping(input.inputContext.Mice[0]);
         }
 
         public IWindow InitWindow()
@@ -182,6 +191,11 @@ namespace MafrixEngine.GraphicsWrapper
             }
 
             return window;
+        }
+
+        public IInputContext InitInput()
+        {
+            return window.CreateInput();
         }
 
         public void InitVulkan()
@@ -226,10 +240,40 @@ namespace MafrixEngine.GraphicsWrapper
             camera = new Camera(new CameraCoordinate(pos, dir, new Vec3(0.0f, -1.0f, 0.0f)),
                             new ProjectInfo(45.0f, (float)swapchainExtent.Width / (float)swapchainExtent.Height));
             startTime = DateTime.Now;
+
+            kbMap.AddKeyBinding(Key.W, camera.OnForward);
+            kbMap.AddKeyBinding(Key.S, camera.OnBackward);
+            kbMap.AddKeyBinding(Key.A, camera.OnLeft);
+            kbMap.AddKeyBinding(Key.D, camera.OnRight);
+            kbMap.AddKeyBinding(Key.Escape, window.Close);
+            mouseMap.OnLeftClick += MouseMap_OnLeftClick;
+            mouseMap.OnMouseMove += MouseMap_OnMouseMove;
+        }
+
+        private void MouseMap_OnMouseMove(IMouse arg1, Vec2 arg2)
+        {
+            if(arg1.Cursor.CursorMode == CursorMode.Raw)
+            {
+                camera.OnRotate(arg2.X, arg2.Y);
+            }
+        }
+
+        private void MouseMap_OnLeftClick(IMouse arg1, Vec2 arg2)
+        {
+            if (mouseMap.cursor.CursorMode == CursorMode.Raw)
+            {
+                mouseMap.cursor.CursorMode = CursorMode.Normal;
+            }
+            else if (mouseMap.cursor.CursorMode == CursorMode.Normal)
+            {
+                mouseMap.cursor.CursorMode = CursorMode.Raw;
+            }
         }
 
         public void MainLoop()
         {
+            window.Update += kbMap.Update;
+            window.Update += mouseMap.Update;
             window.Render += DrawFrame;
             window.Run();
             vk.DeviceWaitIdle(device);
@@ -1059,7 +1103,7 @@ namespace MafrixEngine.GraphicsWrapper
             }
 
             meshes[0].matrix = Matrix4X4.CreateScale<float>(5.0f) * Matrix4X4.CreateTranslation<float>(new Vec3(-400, 0, 0));
-            meshes[0].frameRotate = Scalar.DegreesToRadians<float>(30.0f);
+            meshes[0].frameRotate = Scalar.DegreesToRadians<float>(0.0f);
             //meshes[1].matrix = Matrix4X4.CreateScale<float>(0.03f);
             //meshes[1].frameRotate = Scalar.DegreesToRadians<float>(77.0f);
         }

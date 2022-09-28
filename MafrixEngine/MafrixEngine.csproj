@@ -46,6 +46,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\ThirdParty\ThirdParty.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="Asserts\gaz-66\license.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

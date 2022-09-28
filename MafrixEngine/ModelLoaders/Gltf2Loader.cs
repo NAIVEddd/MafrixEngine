@@ -449,7 +449,7 @@ namespace MafrixEngine.ModelLoaders
                     {
                         var prim = mesh.primitives[i];
                         bindDescriptorSet(i + offset);
-                        vk.CmdDrawIndexed(commandBuffer, prim.indexCount, 1, prim.indexStart, (int)prim.vertexStart, 0);// (uint)m);
+                        vk.CmdDrawIndexed(commandBuffer, prim.indexCount, 1, prim.indexStart, (int)prim.vertexStart, 0);
                     }
                     offset += len;
                 }
@@ -525,7 +525,7 @@ namespace MafrixEngine.ModelLoaders
             }
         }
 
-            public void UpdateUniformBuffer(out Matrix4X4<float>[] modelMatrix)
+        public void UpdateUniformBuffer(out Matrix4X4<float>[] modelMatrix)
         {
             modelMatrix = new Matrix4X4<float>[DescriptorSetCount];
             var offset = 0;

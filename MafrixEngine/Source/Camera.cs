@@ -65,6 +65,7 @@ namespace MafrixEngine.Cameras
     {
         private CameraCoordinate cameraCoordinate;
         private ProjectInfo projectInfo;
+        private float velocity = 0.3f;
 
         public Camera(CameraCoordinate camCoord, ProjectInfo projectInfo)
         {
@@ -84,19 +85,19 @@ namespace MafrixEngine.Cameras
 
         public void OnForward()
         {
-            cameraCoordinate.position += cameraCoordinate.lookDir * 10.0f;
+            cameraCoordinate.position += cameraCoordinate.lookDir * velocity;
         }
         public void OnBackward()
         {
-            cameraCoordinate.position -= cameraCoordinate.lookDir * 10.0f;
+            cameraCoordinate.position -= cameraCoordinate.lookDir * velocity;
         }
         public void OnLeft()
         {
-            cameraCoordinate.position -= cameraCoordinate.right * 10.0f;
+            cameraCoordinate.position -= cameraCoordinate.right * velocity;
         }
         public void OnRight()
         {
-            cameraCoordinate.position += cameraCoordinate.right * 10.0f;
+            cameraCoordinate.position += cameraCoordinate.right * velocity;
         }
         public void OnRotate(float x, float y)
         {

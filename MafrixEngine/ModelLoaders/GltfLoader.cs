@@ -18,6 +18,7 @@ using System.Runtime.InteropServices;
 using Image = SixLabors.ImageSharp.Image;
 using glTFLoader;
 using MafrixEngine.Source.Interface;
+using Serilog.Core;
 
 namespace MafrixEngine.ModelLoaders
 {
@@ -72,6 +73,37 @@ namespace MafrixEngine.ModelLoaders
             attributeDescriptions[2].Offset = (uint)Marshal.OffsetOf<Vertex>("texCoord").ToInt32();
 
             return attributeDescriptions;
+        }
+
+        public override string ToString()
+        {
+            return pos.ToString() + normal.ToString() + texCoord.ToString();
+        }
+    }
+
+    public class VertexList
+    {
+        Dictionary<Vertex, uint> vertexMap = new Dictionary<Vertex, uint>();
+        List<Vertex> verticesList = new List<Vertex>();
+        List<uint> indicesList = new List<uint>();
+
+        public Vertex[] GetVertices { get { return verticesList.ToArray(); } }
+        public uint[] GetIndices { get { return indicesList.ToArray(); } }
+        public uint Add(Vertex vertex)
+        {
+            if (vertexMap.TryGetValue(vertex, out var meshIndex))
+            {
+                indicesList.Add(meshIndex);
+                return meshIndex;
+            }
+            else
+            {
+                var newIndex = (uint)verticesList.Count;
+                indicesList.Add((uint)newIndex);
+                vertexMap[vertex] = (uint)vertexMap.Count;
+                verticesList.Add(vertex);
+                return newIndex;
+            }
         }
     }
 

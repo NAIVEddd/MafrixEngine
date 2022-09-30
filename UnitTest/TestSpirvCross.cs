@@ -61,11 +61,6 @@ namespace UnitTest
                 uint offset = spvc_compiler_get_decoration(compiler_glsl, id, SpvDecoration.SpvDecorationOffset);
                 spvc_type type = spvc_compiler_get_type_handle(compiler_glsl, list[i].type_id);
 
-                //var nameB = spvc_compiler_get_name(compiler_glsl, id);
-                //var name = Marshal.PtrToStringAnsi((IntPtr)nameB);
-                //var tyNameB = spvc_compiler_get_name(compiler_glsl, list[i].type_id);
-                //var tyName = Marshal.PtrToStringAnsi((IntPtr)tyNameB);
-
                 nuint size = 0;
                 spvc_compiler_get_declared_struct_size(compiler_glsl, type, &size);
                 Assert.Equal(Unsafe.SizeOf<UniformBufferObject>(), (int)size);
@@ -102,43 +97,6 @@ namespace UnitTest
         }
 
         [Fact]
-        public unsafe void TestDescriptorSetLayoutInfo()
-        {
-            var vkContext = new VkContext();
-            vkContext.Initialize("TestPipelineInfo", new Version32(0, 0, 1));
-
-            var info = new DescriptorSetLayoutInfo(vkContext.vk, vkContext.device);
-            var vertInfo = new ShaderInfo(vkContext.vk, ShaderStageFlags.VertexBit, "MafrixEngine.Shaders.triangle.vert.spv");
-            foreach(var binding in vertInfo.layoutBindings)
-            {
-                info.AddBinding(0, binding);
-            }
-            Assert.Equal(1u, info.SetCount);
-            //Assert.Single(info.GetLayoutBindings(0));
-
-            var fragInfo = new ShaderInfo(vkContext.vk, ShaderStageFlags.FragmentBit, "MafrixEngine.Shaders.triangle.frag.spv");
-            foreach(var binding in fragInfo.layoutBindings)
-            {
-                info.AddBinding(0, binding);
-            }
-            Assert.Equal(1u, info.SetCount);
-            //Assert.Equal(2, info.GetLayoutBindings(0).Length);
-        }
-
-        [Fact]
-        public unsafe void TestShaderInfo()
-        {
-            var vk = Vk.GetApi();
-            var vertInfo = new ShaderInfo(vk, ShaderStageFlags.VertexBit, "MafrixEngine.Shaders.triangle.vert.spv");
-            Assert.NotNull(vertInfo);
-            Assert.Equal(1, vertInfo.BindingCount);
-
-            var fragInfo = new ShaderInfo(vk, ShaderStageFlags.FragmentBit, "MafrixEngine.Shaders.triangle.frag.spv");
-            Assert.NotNull(fragInfo);
-            Assert.Equal(1, fragInfo.BindingCount);
-        }
-
-        [Fact]
         public unsafe void TestPipelineInfo()
         {
             var vkContext = new VkContext();
@@ -149,9 +107,8 @@ namespace UnitTest
             shaderDefines[0] = new ShaderDefine(vertShader, ShaderStageFlags.VertexBit, false);
             shaderDefines[1] = new ShaderDefine(fragShader, ShaderStageFlags.FragmentBit, false);
 
-            var pipelineInfo = new PipelineInfo(vk, vkContext.device, shaderDefines);
+            var pipelineInfo = new PipelineInfo(vkContext, shaderDefines);
             Assert.NotNull(pipelineInfo);
-            //Assert.Equal(2, pipelineInfo.setLayoutBindings.Length);
         }
     }
 }

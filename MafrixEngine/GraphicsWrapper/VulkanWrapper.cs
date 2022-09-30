@@ -145,7 +145,7 @@ namespace MafrixEngine.GraphicsWrapper
         public Format swapchainImageFormat;
         public Extent2D swapchainExtent;
         public ImageView[] swapchainImageViews;
-        private VkDescriptorPollSize poolSizeInfo;
+        private DescriptorPoolSize[] PoolSizes;
 
         private StagingBuffer staging;
 
@@ -720,12 +720,12 @@ namespace MafrixEngine.GraphicsWrapper
         {
             // parse DescriptorSetLayout from shader.spirv
             var shaderDefines = new ShaderDefine[2];
-            shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit);
-            shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit);
+            shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit, true);
+            shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit, true);
             // using some class to simplfy pipeline create
-            var pipelineInfos = new PipelineInfo(vk, device, shaderDefines);
-            descriptorSetLayout = pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts()[0];
-            poolSizeInfo = new VkDescriptorPollSize(pipelineInfos.setLayoutInfo);
+            var pipelineInfos = new PipelineInfo(vkContext, shaderDefines);
+            descriptorSetLayout = pipelineInfos.setLayoutInfo.SetLayout;
+            PoolSizes = pipelineInfos.setLayoutInfo.PoolSizes;
 
             VkPipelineBuilder pipelineBuilder = new VkPipelineBuilder(vk, device);
             pipelineBuilder.BindInputAssemblyState(PrimitiveTopology.TriangleList);
@@ -742,7 +742,7 @@ namespace MafrixEngine.GraphicsWrapper
             pipelineBuilder.BindColorBlendState(masks);
             pipelineBuilder.BindVertexInput<Vertex>(default);
             pipelineBuilder.BindRenderPass(renderPass, 0);
-            pipelineBuilder.BindPlipelineLayout(pipelineInfos.setLayoutInfo.GetDescriptorSetLayouts());
+            pipelineBuilder.BindPlipelineLayout(pipelineInfos.Layout);
             pipelineBuilder.BindShaderStages(pipelineInfos.pipelineShaderStageCreateInfos);
             pipelineBuilder.Build();
             pipelineLayout = pipelineBuilder.pipelineLayout;
@@ -1197,10 +1197,10 @@ namespace MafrixEngine.GraphicsWrapper
 
             for(var m = 0; m < meshes.Length; m++)
             {
-                var poolSize = new DescriptorPoolSize[poolSizeInfo.poolSizes.Length];
+                var poolSize = new DescriptorPoolSize[PoolSizes.Length];
                 for (var i = 0; i < poolSize.Length; i++)
                 {
-                    var tmp = poolSizeInfo.poolSizes[i];
+                    var tmp = PoolSizes[i];
                     //poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount));
                     poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].voxel.DescriptorSetCount));
                 }

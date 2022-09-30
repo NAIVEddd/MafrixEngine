@@ -1,4 +1,5 @@
 ﻿using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,355 +13,347 @@ using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using SPIRVCross;
-using static SPIRVCross.SPIRV;
 using System.Security.AccessControl;
+using ThirdPartyLib;
+using System.Diagnostics;
+using File = System.IO.File;
 
 namespace MafrixEngine.GraphicsWrapper
 {
-    public class DescriptorSetLayoutInfo
+    public class ShaderIncludedInfo
     {
-        private Vk vk;
-        private Device device;
-        private Dictionary<ValueTuple<uint, uint>, DescriptorSetLayoutBinding> keyValueBindings;
+        private SpvReflectShaderModule module;
+        public byte[] ShaderBytes;
+        private ShaderStageFlags shaderStage;
+        private uint bindingCount;
         private uint setCount;
-        public uint SetCount => setCount;
-        public DescriptorSetLayout[] layouts;
-
-        public DescriptorSetLayoutInfo(Vk vk, Device device)
+        public List<ValueTuple<uint, DescriptorSetLayoutBinding>> bindings;
+        public unsafe ShaderIncludedInfo(string shaderName)
         {
-            this.vk = vk;
-            this.device = device;
-            keyValueBindings = new Dictionary<ValueTuple<uint, uint>, DescriptorSetLayoutBinding>();
-            setCount = 0;
+            bindings = new List<ValueTuple<uint, DescriptorSetLayoutBinding>>();
+
+            ShaderBytes = File.ReadAllBytes(shaderName);
+            var modules = stackalloc SpvReflectShaderModule[1];
+            fixed (void* vertPtr = ShaderBytes)
+            {
+                SpirvReflect.spvReflectCreateShaderModule((nuint)ShaderBytes.Length, vertPtr, modules);
+            }
+            module = modules[0];
+            shaderStage = FromSpvStage(module.shader_stage);
+            bindingCount = module.descriptor_binding_count;
+            setCount = module.descriptor_set_count;
+            for (uint i = 0; i < bindingCount; i++)
+            {
+                bindings.Add(GetSetLayoutBinding(i));
+            }
+        }
+        public unsafe ShaderIncludedInfo(byte[] bytes)
+        {
+            bindings = new List<ValueTuple<uint, DescriptorSetLayoutBinding>>();
+
+            ShaderBytes = bytes;
+            var modules = stackalloc SpvReflectShaderModule[1];
+            fixed (void* vertPtr = ShaderBytes)
+            {
+                SpirvReflect.spvReflectCreateShaderModule((nuint)ShaderBytes.Length, vertPtr, modules);
+            }
+            module = modules[0];
+            shaderStage = FromSpvStage(module.shader_stage);
+            bindingCount = module.descriptor_binding_count;
+            setCount = module.descriptor_set_count;
+            for (uint i = 0; i < bindingCount; i++)
+            {
+                bindings.Add(GetSetLayoutBinding(i));
+            }
+        }
+        private ShaderStageFlags FromSpvStage(SpvReflectShaderStageFlagBits flagBits)
+        {
+            ShaderStageFlags flag = ShaderStageFlags.None;
+            switch (flagBits)
+            {
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_VERTEX_BIT:
+                    flag = ShaderStageFlags.VertexBit;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
+                    flag = ShaderStageFlags.TessellationControlBit;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
+                    flag = ShaderStageFlags.TessellationEvaluationBit;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT:
+                    flag = ShaderStageFlags.GeometryBit;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT:
+                    flag = ShaderStageFlags.FragmentBit;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT:
+                    flag = ShaderStageFlags.ComputeBit;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_TASK_BIT_NV:
+                    flag = ShaderStageFlags.TaskBitNV;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_MESH_BIT_NV:
+                    flag = ShaderStageFlags.MeshBitNV;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_RAYGEN_BIT_KHR:
+                    flag = ShaderStageFlags.RaygenBitKhr;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_ANY_HIT_BIT_KHR:
+                    flag = ShaderStageFlags.AnyHitBitKhr;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_CLOSEST_HIT_BIT_KHR:
+                    flag = ShaderStageFlags.ClosestHitBitKhr;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_MISS_BIT_KHR:
+                    flag = ShaderStageFlags.MissBitKhr;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_INTERSECTION_BIT_KHR:
+                    flag = ShaderStageFlags.IntersectionBitKhr;
+                    break;
+                case SpvReflectShaderStageFlagBits.SPV_REFLECT_SHADER_STAGE_CALLABLE_BIT_KHR:
+                    flag = ShaderStageFlags.CallableBitKhr;
+                    break;
+                default:
+                    break;
+            }
+            return flag;
         }
 
-        public void AddBinding(uint set, DescriptorSetLayoutBinding binding)
+        private DescriptorType FromSpvDescriptorType(SpvReflectDescriptorType descriptorType)
         {
-            if (set + 1 > setCount)
+            DescriptorType descType;
+            switch (descriptorType)
             {
-                setCount = set + 1;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLER:
+                    descType = DescriptorType.Sampler;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER:
+                    descType = DescriptorType.CombinedImageSampler;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                    descType = DescriptorType.SampledImage;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                    descType = DescriptorType.StorageImage;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+                    descType = DescriptorType.UniformTexelBuffer;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+                    descType = DescriptorType.StorageTexelBuffer;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER:
+                    descType = DescriptorType.UniformBuffer;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                    descType = DescriptorType.StorageBuffer;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:
+                    descType = DescriptorType.UniformBufferDynamic;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC:
+                    descType = DescriptorType.StorageBufferDynamic;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_INPUT_ATTACHMENT:
+                    descType = DescriptorType.InputAttachment;
+                    break;
+                case SpvReflectDescriptorType.SPV_REFLECT_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR:
+                    descType = DescriptorType.AccelerationStructureKhr;
+                    break;
+                default:
+                    descType = (DescriptorType)(-1);
+                    break;
             }
-            var bind = binding.Binding;
-            keyValueBindings.Add((set, bind), binding);
+            return descType;
         }
 
-        public DescriptorSetLayoutBinding[] GetAllBindings()
+        private unsafe ValueTuple<uint, DescriptorSetLayoutBinding> GetSetLayoutBinding(uint idx)
         {
-            var bindings = new List<DescriptorSetLayoutBinding>();
-            foreach(var binding in keyValueBindings.Values)
-            {
-                bindings.Add(binding);
-            }
-            return bindings.ToArray();
+            var binding = module.descriptor_bindings[idx];
+            var vkBinding = new DescriptorSetLayoutBinding();
+            vkBinding.Binding = binding.binding;
+            vkBinding.DescriptorType = FromSpvDescriptorType(binding.descriptor_type);
+            vkBinding.DescriptorCount = binding.count;
+            vkBinding.StageFlags = shaderStage;
+            return (binding.set, vkBinding);
         }
 
-        private DescriptorSetLayoutBinding[] GetLayoutBindings(uint set)
+        private string BindingToString(DescriptorSetLayoutBinding binding)
         {
-            var bindings = new List<DescriptorSetLayoutBinding>();
-            foreach (var binding in keyValueBindings.Keys)
-            {
-                if (binding.Item1 == set)
-                {
-                    bindings.Add(keyValueBindings[binding]);
-                }
-            }
-            return bindings.ToArray();
+            var sb = new StringBuilder();
+            sb.AppendLine("Binding : " + binding.Binding.ToString());
+            sb.AppendLine("Binding count: " + binding.DescriptorCount.ToString());
+            sb.AppendLine("Binding type: " + binding.DescriptorType.ToString());
+            return sb.ToString();
         }
-
-        public unsafe DescriptorSetLayout[] GetDescriptorSetLayouts()
+        public override string ToString()
         {
-            if(layouts?.Length != SetCount)
+            var desc = new StringBuilder();
+            desc.Append("Shader Stage is: " + shaderStage.ToString());
+            desc.Append("; Set count: " + setCount.ToString() + ", binding count: " + bindingCount.ToString());
+            foreach (var (set, binding) in bindings)
             {
-                layouts = new DescriptorSetLayout[SetCount];
-                var layoutBindings = new DescriptorSetLayoutBinding[SetCount][];
-                for (uint i = 0; i < SetCount; i++)
-                {
-                    layoutBindings[i] = GetLayoutBindings(i);
-                    var layoutInfo = new DescriptorSetLayoutCreateInfo(StructureType.DescriptorSetLayoutCreateInfo);
-                    layoutInfo.BindingCount = (uint)layoutBindings[i].Length;
-                    fixed (DescriptorSetLayoutBinding* bindings = layoutBindings[i])
-                    {
-                        layoutInfo.PBindings = bindings;
-                    }
-                    if (vk.CreateDescriptorSetLayout(device, layoutInfo, null, out layouts[i]) != Result.Success)
-                    {
-                        throw new Exception("failed to create descriptor set layout.");
-                    }
-                }
+                desc.Append(BindingToString(binding));
             }
-
-            return layouts;
+            return desc.ToString();
         }
     }
 
-    public class ShaderInfo
+    public class SetLayoutInfo
     {
-        private Vk vk;
-        private ShaderStageFlags stageFlags;
-        public byte[] shaderCode;
-        public int BindingCount 
+        private List<List<DescriptorSetLayoutBinding>> setBindings;
+        private Dictionary<DescriptorType, uint> typeCount;
+        private DescriptorSetLayout[] setLayouts;
+        private PipelineLayout pipelineLayout;
+        private DescriptorPool[] pools;
+        public DescriptorPool[] GetDescriptorPools { get { return pools; } }
+        public PipelineLayout GetPipelineLayout { get { return pipelineLayout; } }
+        public DescriptorSetLayout[] GetDescriptorSetLayout { get { return setLayouts; } }
+
+#if DEBUG
+        public DescriptorSetLayout SetLayout { get { return setLayouts[0]; } }
+#endif
+        public SetLayoutInfo()
         {
-            get { return layoutBindings.Length; }
+            setBindings = new List<List<DescriptorSetLayoutBinding>>();
+            typeCount = new Dictionary<DescriptorType, uint>();
         }
-        public ValueTuple<uint, DescriptorSetLayoutBinding>[] setLayoutBindings;
-        public DescriptorSetLayoutBinding[] layoutBindings;
-
-        public ShaderInfo(Vk vk, ShaderStageFlags stageFlags, string shaderName, bool isManifestResource = true)
+        public void Add(ShaderIncludedInfo shader)
         {
-            this.vk = vk;
-            this.stageFlags = stageFlags;
-
-            if(isManifestResource)
+            foreach (var (set, binding) in shader.bindings)
             {
-                shaderCode = LoadEmbeddedResourceBytes(shaderName);
+                while (set >= setBindings.Count)
+                {
+                    setBindings.Add(new List<DescriptorSetLayoutBinding>());
+                }
+                setBindings[(int)set].Add(binding);
+                if (typeCount.TryGetValue(binding.DescriptorType, out var c))
+                {
+                    typeCount[binding.DescriptorType] = c + binding.DescriptorCount;
+                }
+                else
+                {
+                    typeCount[binding.DescriptorType] = binding.DescriptorCount;
+                }
+            }
+        }
+        public unsafe void Build(VkContext vkCtx)
+        {
+            // build DescriptorSetLayout
+            setLayouts = new DescriptorSetLayout[setBindings.Count];
+            for (var i = 0; i < setBindings.Count; i++)
+            {
+                var bindings = setBindings[i].ToArray();
+                fixed (DescriptorSetLayoutBinding* bPtr = bindings)
+                {
+                    var slCreateInfo = new DescriptorSetLayoutCreateInfo();
+                    slCreateInfo.SType = StructureType.DescriptorSetLayoutCreateInfo;
+                    slCreateInfo.BindingCount = (uint)bindings.Length;
+                    slCreateInfo.PBindings = bPtr;
+                    vkCtx.vk.CreateDescriptorSetLayout(vkCtx.device, in slCreateInfo, null, out var layout);
+                    setLayouts[i] = layout;
+                }
+            }
+
+            // build PipelineLayout
+            fixed (DescriptorSetLayout* slPtr = setLayouts)
+            {
+                var createInfo = new PipelineLayoutCreateInfo();
+                createInfo.SType = StructureType.PipelineLayoutCreateInfo;
+                createInfo.SetLayoutCount = (uint)setLayouts.Length;
+                createInfo.PSetLayouts = slPtr;
+                vkCtx.vk.CreatePipelineLayout(vkCtx.device, in createInfo, null, out pipelineLayout);
+            }
+        }
+#if DEBUG
+        public DescriptorPoolSize[] PoolSizes;
+#endif
+        public unsafe DescriptorPool BuildDescriptorPool(VkContext vkCtx)
+        {
+            // build DescriptorPools
+            var pool = new DescriptorPool();
+            var poolSizes = new DescriptorPoolSize[typeCount.Count];
+            for (var i = 0; i < poolSizes.Length; i++)
+            {
+                var (t, c) = typeCount.ElementAt(i);
+                poolSizes[i].DescriptorCount = c;
+                poolSizes[i].Type = t;
+            }
+            var dpCreateInfo = new DescriptorPoolCreateInfo();
+            dpCreateInfo.SType = StructureType.DescriptorPoolCreateInfo;
+            dpCreateInfo.MaxSets = (uint)setLayouts.Length;
+            dpCreateInfo.PoolSizeCount = (uint)poolSizes.Length;
+            fixed (DescriptorPoolSize* psPtr = poolSizes)
+            {
+                dpCreateInfo.PPoolSizes = psPtr;
+                vkCtx.vk.CreateDescriptorPool(vkCtx.device, in dpCreateInfo, null, out pool);
+            }
+
+            PoolSizes = poolSizes;
+
+            return pool;
+        }
+
+        public override string ToString()
+        {
+            var sb = new StringBuilder();
+            BindingsToString(sb);
+            TypeCountToString(sb);
+            return sb.ToString();
+
+            void TypeCountToString(StringBuilder sb)
+            {
+                foreach (var (t, c) in typeCount)
+                {
+                    sb.AppendLine("Type '" + t.ToString() + "' has " + c.ToString());
+                }
+            }
+            void BindingsToString(StringBuilder sb)
+            {
+                for (var idx = 0; idx < setBindings.Count; idx++)
+                {
+                    sb.AppendLine("Set index: " + idx.ToString());
+                    foreach (var binding in setBindings[idx])
+                    {
+                        BindingToString(sb, binding);
+                    }
+                }
+            }
+            void BindingToString(StringBuilder sb, DescriptorSetLayoutBinding binding)
+            {
+                sb.AppendLine("  Binding : " + binding.Binding.ToString());
+                sb.AppendLine("  Binding count: " + binding.DescriptorCount.ToString());
+                sb.AppendLine("  Binding type: " + binding.DescriptorType.ToString());
+            }
+        }
+    }
+
+    public struct ShaderDefine
+    {
+        public string name;
+        public ShaderStageFlags shaderStage;
+        public bool isManifestResource;
+        public ShaderDefine(string n, ShaderStageFlags stageFlags, bool isManifest = false)
+        {
+            name = n;
+            shaderStage = stageFlags;
+            isManifestResource = isManifest;
+        }
+
+        public byte[] Load()
+        {
+            if (isManifestResource)
+            {
+                return LoadEmbeddedResourceBytes(name);
             }
             else
             {
-                shaderCode = System.IO.File.ReadAllBytes(shaderName);
-            }
-            ParseInfo(shaderCode, true);
-        }
-
-        private unsafe void ParseInfo(byte[] shaderBytes, bool newParse)
-        {
-            SpvId* spirv;
-            fixed (byte* ptr = shaderBytes)
-            {
-                spirv = (SpvId*)ptr;
-            }
-            uint word_count = (uint)shaderBytes.Length / 4;
-
-            spvc_context context = default;
-            spvc_parsed_ir ir;
-            spvc_compiler compiler_glsl;
-            spvc_compiler_options options;
-            spvc_resources resources;
-            spvc_reflected_resource* list = default;
-            nuint count = default;
-            DescriptorType descriptorType = default;
-            var tmpBindingList = new List<ValueTuple<uint, DescriptorSetLayoutBinding>>();
-
-            spvc_context_create(&context);
-            spvc_context_parse_spirv(context, spirv, word_count, &ir);
-            spvc_context_create_compiler(context, spvc_backend.Glsl, ir, spvc_capture_mode.TakeOwnership, &compiler_glsl);
-
-            // basic reflection
-            spvc_compiler_create_shader_resources(compiler_glsl, &resources);
-            var entryPoint = stackalloc spvc_entry_point[6];
-            nuint entryPointCount = 0;
-            spvc_compiler_get_entry_points(compiler_glsl, entryPoint, &entryPointCount);
-            {
-                spvc_resources_get_resource_list_for_type(resources, spvc_resource_type.UniformBuffer, (spvc_reflected_resource*)&list, &count);
-                descriptorType = DescriptorTypeCast(spvc_resource_type.UniformBuffer);
-                for (nuint i = 0; i < count; i++)
-                {
-                    var binding = ResourceToBinding(compiler_glsl, descriptorType, list[i]);
-                    tmpBindingList.Add(binding);
-                }
-            }
-            {
-                spvc_resources_get_resource_list_for_type(resources, spvc_resource_type.SampledImage, (spvc_reflected_resource*)&list, &count);
-                descriptorType = DescriptorTypeCast(spvc_resource_type.SampledImage);
-                for(nuint i = 0; i < count; i++)
-                {
-                    var binding = ResourceToBinding(compiler_glsl, descriptorType, list[i]);
-                    tmpBindingList.Add(binding);
-                }
-            }
-            setLayoutBindings = tmpBindingList.ToArray();
-            spvc_context_destroy(context);
-        }
-
-        private unsafe ValueTuple<uint, DescriptorSetLayoutBinding> ResourceToBinding(spvc_compiler compiler, DescriptorType descriptorType, in spvc_reflected_resource resource)
-        {
-            var id = resource.id;
-            var set = spvc_compiler_get_decoration(compiler, id, SpvDecoration.SpvDecorationDescriptorSet);
-            uint binding = spvc_compiler_get_decoration(compiler, id, SpvDecoration.SpvDecorationBinding);
-            spvc_type type = spvc_compiler_get_type_handle(compiler, resource.type_id);
-            uint count = 1;
-            var dimensions = spvc_type_get_num_array_dimensions(type);
-            for(uint i = 0; i < dimensions; i++)
-            {
-                var dim = (uint) spvc_type_get_array_dimension(type, i);
-                count *= dim;
-            }
-
-            var layoutBinding = new DescriptorSetLayoutBinding();
-            layoutBinding.Binding = binding;
-            layoutBinding.DescriptorType = descriptorType;
-            layoutBinding.DescriptorCount = count;
-            layoutBinding.StageFlags = stageFlags;
-            layoutBinding.PImmutableSamplers = null;
-
-            return (set, layoutBinding);
-        }
-
-        public static void AggregateBindings(DescriptorSetLayoutBinding[][] bindingList, out DescriptorSetLayoutBinding[] layoutBindings)
-        {
-            var count = 0;
-            foreach(var binding in bindingList)
-            {
-                count += binding.Length;
-            }
-            layoutBindings = new DescriptorSetLayoutBinding[count];
-
-            var copydest = new Memory<DescriptorSetLayoutBinding>(layoutBindings);
-            var offset = 0;
-            foreach(var binding in bindingList)
-            {
-                var copySrc = new Memory<DescriptorSetLayoutBinding>(binding);
-                copySrc.CopyTo(copydest.Slice(offset));
-                offset += binding.Length;
+                return File.ReadAllBytes(name);
             }
         }
-
-        /// <summary>
-        ///     parse resources to DescriptorSetBinding[]
-        /// </summary>
-        /// <param name="compiler_glsl"></param>
-        /// <param name="resources">
-        ///     struct ShaderResources {
-        ///      SmallVector<Resource> uniform_buffers;
-        ///      SmallVector<Resource> storage_buffers;
-        ///      SmallVector<Resource> stage_inputs;
-        ///      SmallVector<Resource> stage_outputs;
-        ///      SmallVector<Resource> subpass_inputs;
-        ///      SmallVector<Resource> storage_images;
-        ///      SmallVector<Resource> sampled_images;
-        ///      SmallVector<Resource> atomic_counters;
-        ///      SmallVector<Resource> acceleration_structures;
-        ///      // There can only be one push constant block,
-        ///      // but keep the vector in case this restriction is lifted in the future.
-        ///      SmallVector<Resource> push_constant_buffers;
-        ///      // For Vulkan GLSL and HLSL source,
-        ///      // these correspond to separate texture2D and samplers respectively.
-        ///      SmallVector<Resource> separate_images;
-        ///      SmallVector<Resource> separate_samplers;
-        ///      SmallVector<BuiltInResource> builtin_inputs;
-        ///      SmallVector<BuiltInResource> builtin_outputs;
-        ///  };
-        /// </param>
-        /// <param name="resource_Type"></param>
-        /// <param name="list"></param>
-        /// <param name="count"></param>
-        /// <returns type="DescriptorSetLayoutBinding[]"></returns>
-        private unsafe DescriptorSetLayoutBinding[] GetResourceList(spvc_compiler compiler_glsl,
-            spvc_resources resources, spvc_resource_type resource_Type,
-            out spvc_reflected_resource* list, out nuint count)
-        {
-            var descriptorType = DescriptorTypeCast(resource_Type);
-
-            spvc_reflected_resource* tmpList = default;
-            nuint tmpCount = default;
-            spvc_compiler_create_shader_resources(compiler_glsl, &resources);
-            spvc_resources_get_resource_list_for_type(resources, resource_Type, (spvc_reflected_resource*)&tmpList, &tmpCount);
-            list = tmpList;
-            count = tmpCount;
-
-            var bindings = new DescriptorSetLayoutBinding[count];
-            for (uint i = 0; i < count; i++)
-            {
-                var id = list[i].id;
-                var set = spvc_compiler_get_decoration(compiler_glsl, id, SpvDecoration.SpvDecorationDescriptorSet);
-                uint binding = spvc_compiler_get_decoration(compiler_glsl, id, SpvDecoration.SpvDecorationBinding);
-                uint offset = spvc_compiler_get_decoration(compiler_glsl, id, SpvDecoration.SpvDecorationOffset);
-                spvc_type type = spvc_compiler_get_type_handle(compiler_glsl, list[i].type_id);
-
-                nuint size = 0;
-                spvc_compiler_get_declared_struct_size(compiler_glsl, type, &size);
-
-                var layoutBinding = new DescriptorSetLayoutBinding();
-                layoutBinding.Binding = binding;
-                layoutBinding.DescriptorType = descriptorType;
-                layoutBinding.DescriptorCount = 1;
-                layoutBinding.StageFlags = stageFlags;
-                layoutBinding.PImmutableSamplers = null;
-                bindings[i] = layoutBinding;
-            }
-            return bindings;
-        }
-
-        private unsafe ValueTuple<uint, DescriptorSetLayoutBinding>[] GetResourceList(spvc_compiler compiler_glsl,
-            spvc_resources resources, spvc_resource_type resource_Type,
-            out spvc_reflected_resource* list, out nuint count, bool newList)
-        {
-            var descriptorType = DescriptorTypeCast(resource_Type);
-
-            spvc_reflected_resource* tmpList = default;
-            nuint tmpCount = default;
-            spvc_compiler_create_shader_resources(compiler_glsl, &resources);
-            spvc_resources_get_resource_list_for_type(resources, resource_Type, (spvc_reflected_resource*)&tmpList, &tmpCount);
-            list = tmpList;
-            count = tmpCount;
-
-            var bindings = new ValueTuple<uint, DescriptorSetLayoutBinding>[count];
-            for (uint i = 0; i < count; i++)
-            {
-                var id = list[i].id;
-                var set = spvc_compiler_get_decoration(compiler_glsl, id, SpvDecoration.SpvDecorationDescriptorSet);
-                uint binding = spvc_compiler_get_decoration(compiler_glsl, id, SpvDecoration.SpvDecorationBinding);
-                uint offset = spvc_compiler_get_decoration(compiler_glsl, id, SpvDecoration.SpvDecorationOffset);
-                spvc_type type = spvc_compiler_get_type_handle(compiler_glsl, list[i].type_id);
-
-                nuint size = 0;
-                spvc_compiler_get_declared_struct_size(compiler_glsl, type, &size);
-
-                var layoutBinding = new DescriptorSetLayoutBinding();
-                layoutBinding.Binding = binding;
-                layoutBinding.DescriptorType = descriptorType;
-                layoutBinding.DescriptorCount = 1;
-                layoutBinding.StageFlags = stageFlags;
-                layoutBinding.PImmutableSamplers = null;
-                bindings[i] = (set, layoutBinding);
-            }
-            return bindings;
-        }
-
-        /// <summary>
-        /// Cast according to descriptiong in this link:
-        /// https://github.com/KhronosGroup/SPIRV-Cross/wiki/Reflection-API-user-guide
-        /// </summary>
-        /// <param name="resource_Type"></param>
-        /// <returns></returns>
-        /// <exception cref="NotSupportedException"></exception>
-        private DescriptorType DescriptorTypeCast(spvc_resource_type resource_Type)
-        {
-            DescriptorType res = default;
-            switch (resource_Type)
-            {
-                case spvc_resource_type.SeparateImage:
-                    res = DescriptorType.SampledImage;
-                    break;
-                case spvc_resource_type.SeparateSamplers:
-                    res = DescriptorType.Sampler;
-                    //res = DescriptorType.CombinedImageSampler;
-                    break;
-                case spvc_resource_type.SampledImage:
-                    res = DescriptorType.CombinedImageSampler;
-                    break;
-                case spvc_resource_type.StorageImage:
-                    res = DescriptorType.StorageImage;
-                    break;
-                case spvc_resource_type.UniformBuffer:
-                    res = DescriptorType.UniformBuffer;
-                    break;
-                case spvc_resource_type.StorageBuffer:
-                    res = DescriptorType.StorageBuffer;
-                    break;
-                case spvc_resource_type.AccelerationStructure:
-                    res = DescriptorType.AccelerationStructureNV;
-                    break;
-                default:
-                    throw new NotSupportedException("not supported spvc_resource_type:" + resource_Type.ToString());
-            }
-
-            return res;
-        }
-
         internal static byte[] LoadEmbeddedResourceBytes(string path)
         {
-            using (var s = typeof(ShaderInfo).Assembly.GetManifestResourceStream(path))
+            using (var s = typeof(ShaderDefine).Assembly.GetManifestResourceStream(path))
             {
                 using (var ms = new MemoryStream())
                 {
@@ -371,46 +364,36 @@ namespace MafrixEngine.GraphicsWrapper
         }
     }
 
-    public struct ShaderDefine
-    {
-        public string name;
-        public ShaderStageFlags shaderStage;
-        public bool isManifestResource;
-        public ShaderDefine(string n, ShaderStageFlags stageFlags, bool isManifest = true)
-        {
-            name = n;
-            shaderStage = stageFlags;
-            isManifestResource = isManifest;
-        }
-    }
-
     public class PipelineInfo
     {
         private Vk vk;
         private Device device;
-        public DescriptorSetLayoutInfo setLayoutInfo;
+        public SetLayoutInfo setLayoutInfo;
+        public PipelineLayout Layout;
         public PipelineShaderStageCreateInfo[] pipelineShaderStageCreateInfos;
 
-        public PipelineInfo(Vk vk, Device device, ShaderDefine[] shaderDefines)
+        public PipelineInfo(VkContext vkCtx, ShaderDefine[] shaderDefines)
         {
-            this.vk = vk;
-            this.device = device;
-            setLayoutInfo = new DescriptorSetLayoutInfo(vk, device);
+            this.vk = vkCtx.vk;
+            this.device = vkCtx.device;
 
-            var shaderInfos = new ShaderInfo[shaderDefines.Length];
+            var info = new SetLayoutInfo();
+
             pipelineShaderStageCreateInfos = new PipelineShaderStageCreateInfo[shaderDefines.Length];
             for (var i = 0; i < shaderDefines.Length; i++)
             {
-                shaderInfos[i] = new ShaderInfo(vk, shaderDefines[i].shaderStage,
-                    shaderDefines[i].name, shaderDefines[i].isManifestResource);
+                var code = shaderDefines[i].Load();
 
-                foreach(var binding in shaderInfos[i].setLayoutBindings)
-                {
-                    setLayoutInfo.AddBinding(binding.Item1, binding.Item2);
-                }
-
-                pipelineShaderStageCreateInfos[i] = ToStageCreateInfo(shaderInfos[i].shaderCode, shaderDefines[i]);
+                // new version
+                var spvShaderInfo = new ShaderIncludedInfo(code);
+                info.Add(spvShaderInfo);
+             
+                pipelineShaderStageCreateInfos[i] = ToStageCreateInfo(code, shaderDefines[i]);
             }
+            info.Build(vkCtx);
+            info.BuildDescriptorPool(vkCtx);
+            setLayoutInfo = info;
+            Layout = info.GetPipelineLayout;
         }
 
         private unsafe PipelineShaderStageCreateInfo ToStageCreateInfo(byte[] code, ShaderDefine shaderDefine)

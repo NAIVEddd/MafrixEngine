@@ -342,6 +342,11 @@ public class VkPipelineBuilder
             }
             return this;
         }
+        public unsafe VkPipelineBuilder BindPlipelineLayout(PipelineLayout layout)
+        {
+            pipelineLayout = layout;
+            return this;
+        }
         private PipelineShaderStageCreateInfo[] pipelineShaderStageCreateInfos;
         public VkPipelineBuilder BindShaderStages(PipelineShaderStageCreateInfo[] shaders)
         {

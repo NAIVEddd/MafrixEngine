@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
+using System.IO;
 
 using ThirdPartyLib;
 
@@ -19,8 +20,8 @@ namespace UnitTest
         [Fact]
         public unsafe void TestSpirvReflect_Api()
         {
-            byte[] vertBytes = System.IO.File.ReadAllBytes(vertShader);
-            byte[] fragBytes = System.IO.File.ReadAllBytes(fragShader);
+            byte[] vertBytes = File.ReadAllBytes(vertShader);
+            byte[] fragBytes = File.ReadAllBytes(fragShader);
 
             var module = stackalloc SpvReflectShaderModule[1];
             fixed(void* vertPtr = vertBytes)

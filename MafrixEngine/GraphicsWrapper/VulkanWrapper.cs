@@ -1193,89 +1193,30 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateDescriptorPool()
         {
-            var poolInfo = new DescriptorPoolCreateInfo(StructureType.DescriptorPoolCreateInfo);
-
             for(var m = 0; m < meshes.Length; m++)
             {
-                var poolSize = new DescriptorPoolSize[PoolSizes.Length];
-                for (var i = 0; i < poolSize.Length; i++)
-                {
-                    var tmp = PoolSizes[i];
-                    //poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount));
-                    poolSize[i] = new DescriptorPoolSize(tmp.Type, tmp.DescriptorCount * (uint)(MaxFrameInFlight * meshes[m].voxel.DescriptorSetCount));
-                }
-                poolInfo.PoolSizeCount = (uint)poolSize.Length;
-                fixed (DescriptorPoolSize* poolSizePtr = poolSize)
-                {
-                    poolInfo.PPoolSizes = poolSizePtr;
-                }
-                //poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount);
-                poolInfo.MaxSets = (uint) (MaxFrameInFlight * meshes[m].voxel.DescriptorSetCount);
-                if (vk.CreateDescriptorPool(device, poolInfo, null, out meshes[m].descriptorPool) != Result.Success)
-                {
-                    throw new Exception("failed to create descriptor pool.");
-                }
+                meshes[m].descriptorPool =
+                    //meshes[m].gltf2.CreateDescriptorPool(
+                    meshes[m].voxel.CreateDescriptorPool(
+                        vkContext,
+                        new DescriptorSetLayout[] { descriptorSetLayout },
+                        PoolSizes, MaxFrameInFlight);
             }
         }
 
         private unsafe void CreateDescriptorSets()
         {
-            WriteDescriptorSet[] descriptorWrites = new WriteDescriptorSet[2];
             for(var m = 0; m < meshes.Length; m++)
             {
-                //var setCount = MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount;
-                var setCount = MaxFrameInFlight * meshes[m].voxel.DescriptorSetCount;
+                var setLayouts = new DescriptorSetLayout[] {descriptorSetLayout};
+                meshes[m].descriptorSets = meshes[m].voxel.AllocateDescriptorSets(vkContext, meshes[m].descriptorPool, setLayouts, MaxFrameInFlight);
 
-                var layouts = new DescriptorSetLayout[setCount];
-                for (var i = 0; i < setCount; i++)
-                {
-                    layouts[i] = descriptorSetLayout;
-                }
-
-                var allocInfo = new DescriptorSetAllocateInfo(StructureType.DescriptorSetAllocateInfo);
-                allocInfo.DescriptorPool = meshes[m].descriptorPool;
-                allocInfo.DescriptorSetCount = (uint)setCount;
-                fixed (DescriptorSetLayout* ptr = layouts)
-                {
-                    allocInfo.PSetLayouts = ptr;
-                    meshes[m].descriptorSets = new DescriptorSet[setCount];
-                    if (vk.AllocateDescriptorSets(device, &allocInfo, meshes[m].descriptorSets) != Result.Success)
-                    {
-                        throw new Exception("failed to allocate descriptor sets.");
-                    }
-                }
-
-                descriptorWrites[0].SType = StructureType.WriteDescriptorSet;
-                descriptorWrites[1].SType = StructureType.WriteDescriptorSet;
                 for (var i = 0; i < MaxFrameInFlight; i++)
                 {
-                    var bufferInfo = new DescriptorBufferInfo();
-                    bufferInfo.Buffer = meshes[m].uniformBuffer[i];
-                    bufferInfo.Offset = 0;
-                    bufferInfo.Range = (ulong)Unsafe.SizeOf<UniformBufferObject>();
-
-                    var imageInfo = new DescriptorImageInfo[3];
-                    imageInfo[0].ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
-                    imageInfo[0].Sampler = textureSampler;
-                    imageInfo[1].ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
-                    imageInfo[1].Sampler = textureSampler;
-                    imageInfo[2].ImageLayout = ImageLayout.ShaderReadOnlyOptimal;
-                    imageInfo[2].Sampler = textureSampler;
-
-                    descriptorWrites[0].DstBinding = 0;
-                    descriptorWrites[0].DstArrayElement = 0;
-                    descriptorWrites[0].DescriptorType = DescriptorType.UniformBuffer;
-                    descriptorWrites[0].DescriptorCount = 1;
-
-                    descriptorWrites[1].DstBinding = 1;
-                    descriptorWrites[1].DstArrayElement = 0;
-                    descriptorWrites[1].DescriptorType = DescriptorType.CombinedImageSampler;
-                    descriptorWrites[1].DescriptorCount = (uint)imageInfo.Length;
-
                     //meshes[m].gltf2.UpdateDescriptorSets(
                     meshes[m].voxel.UpdateDescriptorSets(
-                        vk, device,
-                        descriptorWrites, imageInfo, bufferInfo,
+                        vkContext,
+                        textureSampler,
                         //meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].gltf2.DescriptorSetCount);
                         meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].voxel.DescriptorSetCount);
                 }

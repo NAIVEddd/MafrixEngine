@@ -69,27 +69,84 @@ namespace MafrixEngine.ModelLoaders
             this.texture = new VkTexture(vkContext, stCommand, stagingBuffer, image);
         }
 
-        public unsafe void UpdateDescriptorSets(Vk vk, Device device,
-            WriteDescriptorSet[] descriptorWrites,
-            DescriptorImageInfo[] imageInfo,
-            DescriptorBufferInfo bufferInfo,
-            DescriptorSet[] descriptorSets, Buffer[] buffer, int start)
+        public unsafe DescriptorPool CreateDescriptorPool(VkContext vkContext, DescriptorSetLayout[] setLayouts, DescriptorPoolSize[] poolSizes, int frames)
         {
-            descriptorWrites[0].PBufferInfo = &bufferInfo;
-            fixed (DescriptorImageInfo* pimageInfo = imageInfo)
+            DescriptorPool pool;
+            var setCount = setLayouts.Length * frames * DescriptorSetCount;
+            var tmpPoolSizes = new DescriptorPoolSize[poolSizes.Length];
+            for (int i = 0; i < poolSizes.Length; i++)
             {
-                descriptorWrites[1].PImageInfo = pimageInfo;
-                bufferInfo.Buffer = buffer[start];
-                imageInfo[0].ImageView = texture.imageView;
-                imageInfo[1].ImageView = texture.imageView;
-                imageInfo[2].ImageView = texture.imageView;
-                descriptorWrites[0].DstSet = descriptorSets[start];
-                descriptorWrites[1].DstSet = descriptorSets[start];
-                fixed (WriteDescriptorSet* descPtr = descriptorWrites)
+                tmpPoolSizes[i] = poolSizes[i];
+                tmpPoolSizes[i].DescriptorCount *= (uint)(frames * DescriptorSetCount);
+            }
+
+            fixed(DescriptorPoolSize* ptr = tmpPoolSizes)
+            {
+                var createInfo = new DescriptorPoolCreateInfo(StructureType.DescriptorPoolCreateInfo);
+                createInfo.MaxSets = (uint)setCount;
+                createInfo.PoolSizeCount = (uint)tmpPoolSizes.Length;
+                createInfo.PPoolSizes = ptr;
+                if (vkContext.vk.CreateDescriptorPool(vkContext.device, in createInfo, null, out pool) != Result.Success)
                 {
-                    vk.UpdateDescriptorSets(device, 2, descPtr, 0, null);
+                    throw new Exception("failed to create descriptor pool.");
                 }
             }
+
+            return pool;
+        }
+
+        public unsafe DescriptorSet[] AllocateDescriptorSets(VkContext vkContext, DescriptorPool pool, DescriptorSetLayout[] setLayouts, int frames)
+        {
+            var setCount = frames * DescriptorSetCount * setLayouts.Length;
+            var sets = new DescriptorSet[setCount];
+
+            var layouts = new DescriptorSetLayout[setLayouts.Length];
+            for (var i = 0; i < layouts.Length; i++)
+            {
+                layouts[i] = setLayouts[i];
+            }
+
+            var descriptorSetCount = (layouts.Length * DescriptorSetCount);
+            var allocInfo = new DescriptorSetAllocateInfo(StructureType.DescriptorSetAllocateInfo);
+            allocInfo.DescriptorPool = pool;
+            allocInfo.DescriptorSetCount = (uint)descriptorSetCount;
+            fixed (DescriptorSetLayout* ptr = layouts)
+            {
+                allocInfo.PSetLayouts = ptr;
+                var offset = 0;
+                for (int i = 0; i < frames; i++)
+                {
+                    var tmpSetLayout = new DescriptorSet[descriptorSetCount];
+                    if(vkContext.vk.AllocateDescriptorSets(vkContext.device, &allocInfo, tmpSetLayout) != Result.Success)
+                    {
+                        throw new Exception("failed to allocate descriptor sets.");
+                    }
+                    for (int j = 0; j < descriptorSetCount; j++)
+                    {
+                        sets[offset + j] = tmpSetLayout[j];
+                    }
+
+                    offset += descriptorSetCount;
+                }
+            }
+
+            return sets;
+        }
+
+        public unsafe void UpdateDescriptorSets(VkContext vkContext,
+            Sampler sampler,
+            DescriptorSet[] descriptorSets, Buffer[] buffer, int start)
+        {
+            var writer = new VkDescriptorWriter(vkContext, 1, 3);
+            writer.WriteBuffer(0, new DescriptorBufferInfo(buffer[start], 0, (ulong)Unsafe.SizeOf<UniformBufferObject>()));
+            var imageInfos = new DescriptorImageInfo[]
+            {
+                new DescriptorImageInfo(sampler, texture.imageView, ImageLayout.ShaderReadOnlyOptimal),
+                new DescriptorImageInfo(sampler, texture.imageView, ImageLayout.ShaderReadOnlyOptimal),
+                new DescriptorImageInfo(sampler, texture.imageView, ImageLayout.ShaderReadOnlyOptimal),
+            };
+            writer.WriteImage(1, imageInfos);
+            writer.Write(descriptorSets[start]);
         }
 
         public void UpdateUniformBuffer(out Matrix4X4<float>[] modelMatrix)

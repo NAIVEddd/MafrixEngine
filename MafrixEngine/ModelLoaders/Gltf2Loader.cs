@@ -26,6 +26,7 @@ using VulkanSampler = Silk.NET.Vulkan.Sampler;
 using MafrixEngine.GraphicsWrapper;
 using Mesh = glTFLoader.Schema.Mesh;
 using Silk.NET.Input;
+using System.Collections;
 
 namespace MafrixEngine.ModelLoaders
 {
@@ -464,31 +465,84 @@ namespace MafrixEngine.ModelLoaders
             }
         }
 
-        public unsafe void UpdateDescriptorSets(Vk vk, Device device,
-            WriteDescriptorSet[] descriptorWrites,
-            DescriptorImageInfo[] imageInfo,
-            DescriptorBufferInfo bufferInfo,
-            DescriptorSet[] descriptorSets, VulkanBuffer[] buffer, int start)
+        public unsafe DescriptorPool CreateDescriptorPool(VkContext vkContext, DescriptorSetLayout[] setLayouts, DescriptorPoolSize[] poolSizes, int frames)
         {
-            descriptorWrites[0].PBufferInfo = &bufferInfo;
-            fixed(DescriptorImageInfo* pimageInfo = imageInfo)
+            DescriptorPool pool;
+            var setCount = setLayouts.Length * frames * DescriptorSetCount;
+            var tmpPoolSizes = new DescriptorPoolSize[poolSizes.Length];
+            for (int i = 0; i < poolSizes.Length; i++)
             {
-                descriptorWrites[1].PImageInfo = pimageInfo;
-                foreach (var node in nodes)
+                tmpPoolSizes[i] = poolSizes[i];
+                tmpPoolSizes[i].DescriptorCount *= (uint)(frames * DescriptorSetCount);
+            }
+
+            fixed (DescriptorPoolSize* ptr = tmpPoolSizes)
+            {
+                var createInfo = new DescriptorPoolCreateInfo(StructureType.DescriptorPoolCreateInfo);
+                createInfo.MaxSets = (uint)setCount;
+                createInfo.PoolSizeCount = (uint)tmpPoolSizes.Length;
+                createInfo.PPoolSizes = ptr;
+                if (vkContext.vk.CreateDescriptorPool(vkContext.device, in createInfo, null, out pool) != Result.Success)
                 {
-                    UpdateNodeDescriptorSets(vk, device, node,
-                            descriptorWrites, imageInfo, ref bufferInfo,
-                            descriptorSets, buffer, ref start);
+                    throw new Exception("failed to create descriptor pool.");
                 }
             }
-            
+
+            return pool;
         }
 
-        private unsafe void UpdateNodeDescriptorSets(Vk vk, Device device,
+        public unsafe DescriptorSet[] AllocateDescriptorSets(VkContext vkContext, DescriptorPool pool, DescriptorSetLayout[] setLayouts, int frames)
+        {
+            var setCount = frames * DescriptorSetCount * setLayouts.Length;
+            var sets = new DescriptorSet[setCount];
+
+            var layouts = new DescriptorSetLayout[setLayouts.Length];
+            for (var i = 0; i < layouts.Length; i++)
+            {
+                layouts[i] = setLayouts[i];
+            }
+
+            var descriptorSetCount = (layouts.Length * DescriptorSetCount);
+            var allocInfo = new DescriptorSetAllocateInfo(StructureType.DescriptorSetAllocateInfo);
+            allocInfo.DescriptorPool = pool;
+            allocInfo.DescriptorSetCount = (uint)descriptorSetCount;
+            fixed (DescriptorSetLayout* ptr = layouts)
+            {
+                allocInfo.PSetLayouts = ptr;
+                var offset = 0;
+                for (int i = 0; i < frames; i++)
+                {
+                    var tmpSetLayout = new DescriptorSet[descriptorSetCount];
+                    if (vkContext.vk.AllocateDescriptorSets(vkContext.device, &allocInfo, tmpSetLayout) != Result.Success)
+                    {
+                        throw new Exception("failed to allocate descriptor sets.");
+                    }
+                    for (int j = 0; j < descriptorSetCount; j++)
+                    {
+                        sets[offset + j] = tmpSetLayout[j];
+                    }
+
+                    offset += descriptorSetCount;
+                }
+            }
+
+            return sets;
+        }
+
+        public unsafe void UpdateDescriptorSets(VkContext vkContext,
+            VulkanSampler sampler,
+            DescriptorSet[] descriptorSets, VulkanBuffer[] buffer, int start)
+        {
+            foreach (var node in nodes)
+            {
+                UpdateNodeDescriptorSets(vkContext, node, sampler,
+                        descriptorSets, buffer, ref start);
+            }
+        }
+
+        private unsafe void UpdateNodeDescriptorSets(VkContext vkContext,
             Gltf2Node node,
-            WriteDescriptorSet[] descriptorWrites,
-            DescriptorImageInfo[] imageInfo,
-            ref DescriptorBufferInfo bufferInfo,
+            VulkanSampler sampler,
             DescriptorSet[] descriptorSets, VulkanBuffer[] buffer, ref int offset)
         {
             if (node.mesh.HasValue)
@@ -500,16 +554,16 @@ namespace MafrixEngine.ModelLoaders
                     var prim = mesh.primitives[i];
                     var material = materials[prim.materialIndex];
 
-                    bufferInfo.Buffer = buffer[offset + i];
-                    imageInfo[0].ImageView = material.baseTexture.imageView;
-                    imageInfo[1].ImageView = material.metallicTexture.imageView;
-                    imageInfo[2].ImageView = material.normalTexture.imageView;
-                    descriptorWrites[0].DstSet = descriptorSets[offset + i];
-                    descriptorWrites[1].DstSet = descriptorSets[offset + i];
-                    fixed (WriteDescriptorSet* descPtr = descriptorWrites)
+                    var writer = new VkDescriptorWriter(vkContext, 1, 3);
+                    writer.WriteBuffer(0, new DescriptorBufferInfo(buffer[offset + i], 0, (ulong)Unsafe.SizeOf<UniformBufferObject>()));
+                    var imageInfos = new DescriptorImageInfo[]
                     {
-                        vk.UpdateDescriptorSets(device, 2, descPtr, 0, null);
-                    }
+                        new DescriptorImageInfo(sampler, material.baseTexture.imageView, ImageLayout.ShaderReadOnlyOptimal),
+                        new DescriptorImageInfo(sampler, material.metallicTexture.imageView, ImageLayout.ShaderReadOnlyOptimal),
+                        new DescriptorImageInfo(sampler, material.normalTexture.imageView, ImageLayout.ShaderReadOnlyOptimal),
+                    };
+                    writer.WriteImage(1, imageInfos);
+                    writer.Write(descriptorSets[offset + i]);
                 }
                 offset += len;
             }
@@ -518,8 +572,7 @@ namespace MafrixEngine.ModelLoaders
             {
                 foreach (var child in node.childrens)
                 {
-                    UpdateNodeDescriptorSets(vk, device, nodes[child],
-                        descriptorWrites, imageInfo, ref bufferInfo,
+                    UpdateNodeDescriptorSets(vkContext, nodes[child], sampler,
                         descriptorSets, buffer, ref offset);
                 }
             }

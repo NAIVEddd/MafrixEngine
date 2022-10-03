@@ -1,0 +1,11 @@
+Model Information:
+* title:	Bee
+* source:	https://sketchfab.com/3d-models/bee-2faaac59c42c4797b232f16563902bd7
+* author:	davi.lanni (https://sketchfab.com/davi.lanni)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Bee" (https://sketchfab.com/3d-models/bee-2faaac59c42c4797b232f16563902bd7) by davi.lanni (https://sketchfab.com/davi.lanni) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)

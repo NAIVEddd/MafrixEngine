@@ -27,6 +27,7 @@ using MafrixEngine.GraphicsWrapper;
 using Mesh = glTFLoader.Schema.Mesh;
 using Silk.NET.Input;
 using System.Collections;
+using MafrixEngine.Source.Interface;
 
 namespace MafrixEngine.ModelLoaders
 {
@@ -407,10 +408,11 @@ namespace MafrixEngine.ModelLoaders
         }
     }
 
-    public class Gltf2RootNode : IDisposable
+    public class Gltf2RootNode : IDescriptor, IDisposable
     {
         public Vertex[] vertices;
         public uint[] indices;
+        public Gltf2Node[] sceneNodes;
         public Gltf2Node[] nodes;
         public Gltf2Texture[] textures;
         public Gltf2Material[] materials;
@@ -425,6 +427,7 @@ namespace MafrixEngine.ModelLoaders
                 }
                 return count;
             }
+            set { }
         }
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer,
@@ -496,13 +499,19 @@ namespace MafrixEngine.ModelLoaders
             var setCount = frames * DescriptorSetCount * setLayouts.Length;
             var sets = new DescriptorSet[setCount];
 
-            var layouts = new DescriptorSetLayout[setLayouts.Length];
-            for (var i = 0; i < layouts.Length; i++)
+            var layouts = new DescriptorSetLayout[DescriptorSetCount * setLayouts.Length];
+            var copyOffset = 0;
+            for (int j = 0; j < DescriptorSetCount * setLayouts.Length; j++)
             {
-                layouts[i] = setLayouts[i];
+                for (var i = 0; i < setLayouts.Length; i++)
+                {
+                    layouts[copyOffset + i] = setLayouts[i];
+                }
+                copyOffset += setLayouts.Length;
             }
+            
 
-            var descriptorSetCount = (layouts.Length * DescriptorSetCount);
+            var descriptorSetCount = layouts.Length;
             var allocInfo = new DescriptorSetAllocateInfo(StructureType.DescriptorSetAllocateInfo);
             allocInfo.DescriptorPool = pool;
             allocInfo.DescriptorSetCount = (uint)descriptorSetCount;
@@ -513,9 +522,12 @@ namespace MafrixEngine.ModelLoaders
                 for (int i = 0; i < frames; i++)
                 {
                     var tmpSetLayout = new DescriptorSet[descriptorSetCount];
-                    if (vkContext.vk.AllocateDescriptorSets(vkContext.device, &allocInfo, tmpSetLayout) != Result.Success)
+                    fixed (DescriptorSet* setPtr = tmpSetLayout)
                     {
-                        throw new Exception("failed to allocate descriptor sets.");
+                        if (vkContext.vk.AllocateDescriptorSets(vkContext.device, in allocInfo, setPtr) != Result.Success)
+                        {
+                            throw new Exception("failed to allocate descriptor sets.");
+                        }
                     }
                     for (int j = 0; j < descriptorSetCount; j++)
                     {
@@ -533,7 +545,8 @@ namespace MafrixEngine.ModelLoaders
             VulkanSampler sampler,
             DescriptorSet[] descriptorSets, VulkanBuffer[] buffer, int start)
         {
-            foreach (var node in nodes)
+            foreach (var node in sceneNodes)
+            //foreach (var node in nodes)
             {
                 UpdateNodeDescriptorSets(vkContext, node, sampler,
                         descriptorSets, buffer, ref start);
@@ -582,7 +595,8 @@ namespace MafrixEngine.ModelLoaders
         {
             modelMatrix = new Matrix4X4<float>[DescriptorSetCount];
             var offset = 0;
-            foreach (var node in nodes)
+            foreach (var node in sceneNodes)
+            //foreach (var node in nodes)
             {
                 UpdateNodeUniformBuffer(node, ref modelMatrix, Matrix4X4<float>.Identity, ref offset);
             }
@@ -695,10 +709,11 @@ namespace MafrixEngine.ModelLoaders
             rootNode.indices = indices.ToArray();
             rootNode.materials = materials;
             rootNode.meshes = meshes;
-            rootNode.nodes = new Gltf2Node[scene.Nodes.Length];
-            for (int i = 0; i < rootNode.nodes.Length; i++)
+            rootNode.nodes = nodes;
+            rootNode.sceneNodes = new Gltf2Node[scene.Nodes.Length];
+            for (int i = 0; i < scene.Nodes.Length; i++)
             {
-                rootNode.nodes[i] = nodes[scene.Nodes[i]];
+                rootNode.sceneNodes[i] = nodes[scene.Nodes[i]];
             }
             return rootNode;
         }

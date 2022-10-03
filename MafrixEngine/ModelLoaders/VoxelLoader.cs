@@ -20,6 +20,7 @@ using Image = SixLabors.ImageSharp.Image;
 using Serilog.Core;
 using ThirdPartyLib;
 using System.Drawing;
+using MafrixEngine.Source.Interface;
 
 namespace MafrixEngine.ModelLoaders
 {
@@ -31,7 +32,7 @@ namespace MafrixEngine.ModelLoaders
         Water,
     }
 
-    public class VoxelLoader : IDisposable
+    public class VoxelLoader : IDescriptor, IDisposable
     {
         private Cube cube;
         public Vertex[] vertices;

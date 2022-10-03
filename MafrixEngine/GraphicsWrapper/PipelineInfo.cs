@@ -286,7 +286,10 @@ namespace MafrixEngine.GraphicsWrapper
             fixed (DescriptorPoolSize* psPtr = poolSizes)
             {
                 dpCreateInfo.PPoolSizes = psPtr;
-                vkCtx.vk.CreateDescriptorPool(vkCtx.device, in dpCreateInfo, null, out pool);
+                //if(vkCtx.vk.CreateDescriptorPool(vkCtx.device, in dpCreateInfo, null, out pool) != Result.Success)
+                //{
+                //    throw new Exception("Failed create DescriptorPool");
+                //}
             }
 
             PoolSizes = poolSizes;

@@ -51,8 +51,7 @@ namespace MafrixEngine.GraphicsWrapper
         public DescriptorSet[] descriptorSets;
         public Mat4 matrix;
         public float frameRotate;
-        public Gltf2RootNode gltf2;
-        public VoxelLoader voxel;
+        public IDescriptor model;
 
         private Vk vk;
         private Device device;
@@ -73,14 +72,12 @@ namespace MafrixEngine.GraphicsWrapper
             descriptorSets = default;
             matrix = default;
             frameRotate = default;
-            gltf2 = default;
-            voxel = new VoxelLoader();
+            model = default;
         }
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer, Action<int> action)
         {
-            voxel.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
-            //gltf2.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
+            model.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
         }
 
         public unsafe void Dispose()
@@ -99,8 +96,7 @@ namespace MafrixEngine.GraphicsWrapper
             }
             vk.DestroyDescriptorPool(device, descriptorPool, null);
 
-            //gltf2.Dispose();
-            voxel.Dispose();
+            model.Dispose();
         }
     }
 
@@ -236,8 +232,6 @@ namespace MafrixEngine.GraphicsWrapper
             {
                 meshes[i].vertices = Array.Empty<Vertex>();
                 meshes[i].indices = Array.Empty<uint>();
-                //meshes[i].gltf2.vertices = Array.Empty<Vertex>();
-                //meshes[i].gltf2.indices = Array.Empty<uint>();
             }
 
             // Gltf model camera
@@ -251,6 +245,7 @@ namespace MafrixEngine.GraphicsWrapper
             var dir = new Vec3(0, 0, 0) - pos;
             camera = new Camera(new CameraCoordinate(pos, dir, new Vec3(0.0f, -1.0f, 0.0f)),
                             new ProjectInfo(45.0f, (float)swapchainExtent.Width / (float)swapchainExtent.Height));
+
             startTime = DateTime.Now;
 
             kbMap.AddKeyBinding(Key.W, camera.OnForward);
@@ -387,12 +382,10 @@ namespace MafrixEngine.GraphicsWrapper
 
             foreach (var mesh in meshes)
             {
-                //var descs = mesh.gltf2.DescriptorSetCount;
-                var descs = mesh.voxel.DescriptorSetCount;
+                var descs = mesh.model.DescriptorSetCount;
 
                 var offset = index * descs * sizeof(UniformBufferObject);
-                //mesh.gltf2.UpdateUniformBuffer(out var modelMatrices);
-                mesh.voxel.UpdateUniformBuffer(out var modelMatrices);
+                mesh.model.UpdateUniformBuffer(out var modelMatrices);
                 void* data = null;
                 ulong datasize = (ulong)(Unsafe.SizeOf<UniformBufferObject>());
                 var model = Matrix4X4.CreateRotationY<float>(time * mesh.frameRotate);
@@ -1100,7 +1093,8 @@ namespace MafrixEngine.GraphicsWrapper
         {
             var modelPathNames = new ValueTuple<string, string>[]
             {
-                ("Asserts/sponza", "Sponza.gltf"),
+                ("Asserts/facial_body", "scene.gltf"),
+                //("Asserts/sponza", "Sponza.gltf"),
                 //("Asserts/gaz-66", "scene.gltf")
             };
 
@@ -1110,14 +1104,21 @@ namespace MafrixEngine.GraphicsWrapper
             for (var i = 0; i < modelPathNames.Length; i++)
             {
                 meshes[i] = new Mesh(vk, device);
+
+                /// gltf load model
                 var (path, name) = modelPathNames[i];
                 var loader = new Gltf2Loader(path, name);
-                //meshes[i].gltf2 = loader.Parse(vkContext, stCommand, staging);
-                //meshes[i].vertices = meshes[i].gltf2.vertices;
-                //meshes[i].indices = meshes[i].gltf2.indices;
-                meshes[i].voxel.Build(vkContext, stCommand, staging);
-                meshes[i].vertices = meshes[i].voxel.vertices;
-                meshes[i].indices = meshes[i].voxel.indices;
+                var gltf2 = loader.Parse(vkContext, stCommand, staging);
+                meshes[i].vertices = gltf2.vertices;
+                meshes[i].indices = gltf2.indices;
+                meshes[i].model = gltf2;
+
+                /// voxel load model
+                //var voxel = new VoxelLoader();
+                //voxel.Build(vkContext, stCommand, staging);
+                //meshes[i].vertices = voxel.vertices;
+                //meshes[i].indices = voxel.indices;
+                //meshes[i].model = voxel;
             }
 
             meshes[0].matrix = Matrix4X4<float>.Identity;
@@ -1175,10 +1176,8 @@ namespace MafrixEngine.GraphicsWrapper
             
             for(var m = 0; m < meshes.Length; m++)
             {
-                //var setCount = MaxFrameInFlight * meshes[m].gltf2.DescriptorSetCount;
-                //ulong bufferSize = (ulong)(Unsafe.SizeOf<UniformBufferObject>() * meshes[m].gltf2.DescriptorSetCount);
-                var setCount = MaxFrameInFlight * meshes[m].voxel.DescriptorSetCount;
-                ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].voxel.DescriptorSetCount);
+                var setCount = MaxFrameInFlight * meshes[m].model.DescriptorSetCount;
+                ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].model.DescriptorSetCount);
                 meshes[m].uniformBuffer = new Buffer[setCount];
                 meshes[m].uniformMemory = new DeviceMemory[setCount];
                 for (int i = 0; i < setCount; i++)
@@ -1196,8 +1195,7 @@ namespace MafrixEngine.GraphicsWrapper
             for(var m = 0; m < meshes.Length; m++)
             {
                 meshes[m].descriptorPool =
-                    //meshes[m].gltf2.CreateDescriptorPool(
-                    meshes[m].voxel.CreateDescriptorPool(
+                    meshes[m].model.CreateDescriptorPool(
                         vkContext,
                         new DescriptorSetLayout[] { descriptorSetLayout },
                         PoolSizes, MaxFrameInFlight);
@@ -1209,16 +1207,14 @@ namespace MafrixEngine.GraphicsWrapper
             for(var m = 0; m < meshes.Length; m++)
             {
                 var setLayouts = new DescriptorSetLayout[] {descriptorSetLayout};
-                meshes[m].descriptorSets = meshes[m].voxel.AllocateDescriptorSets(vkContext, meshes[m].descriptorPool, setLayouts, MaxFrameInFlight);
+                meshes[m].descriptorSets = meshes[m].model.AllocateDescriptorSets(vkContext, meshes[m].descriptorPool, setLayouts, MaxFrameInFlight);
 
                 for (var i = 0; i < MaxFrameInFlight; i++)
                 {
-                    //meshes[m].gltf2.UpdateDescriptorSets(
-                    meshes[m].voxel.UpdateDescriptorSets(
+                    meshes[m].model.UpdateDescriptorSets(
                         vkContext,
                         textureSampler,
-                        //meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].gltf2.DescriptorSetCount);
-                        meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].voxel.DescriptorSetCount);
+                        meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].model.DescriptorSetCount);
                 }
             }
         }
@@ -1331,8 +1327,7 @@ namespace MafrixEngine.GraphicsWrapper
 
                     void BindDescriptorSets(int nodeIndex)
                     {
-                        //var idx = i * meshes[m].gltf2.DescriptorSetCount + nodeIndex;
-                        var idx = i * meshes[m].voxel.DescriptorSetCount + nodeIndex;
+                        var idx = i * meshes[m].model.DescriptorSetCount + nodeIndex;
                         vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, meshes[m].descriptorSets[idx], 0, null);
                     }
                 }

@@ -41,7 +41,7 @@ namespace MafrixEngine.ModelLoaders
 
         public VoxelLoader()
         {
-            var vList = new VertexList();
+            var vList = new VertexList<Vertex>();
             cube = new Cube(vList);
         }
 
@@ -175,7 +175,7 @@ namespace MafrixEngine.ModelLoaders
             var position = new Vector3D<float>(blockIndex.X * SideLength,
                                                 blockIndex.Y * HeightLength,
                                                 blockIndex.Z * SideLength);
-            var vList = new VertexList();
+            var vList = new VertexList<Vertex>();
             cube = new Cube(vList);
             vertices = new Vertex[CubeCount * 24];
             indices = new uint[CubeCount * 36];
@@ -258,7 +258,7 @@ namespace MafrixEngine.ModelLoaders
                 var minMax = fastNoise.GenUniformGrid2D(noiseData, cubeIndex.X, cubeIndex.Z, (int)SideCount, (int)SideCount, 0.2f, 1337);
             }
 
-            var vList = new VertexList();
+            var vList = new VertexList<Vertex>();
             cube = new Cube(vList);
 
             var curPos = position;
@@ -354,8 +354,8 @@ namespace MafrixEngine.ModelLoaders
 
     public class Cube
     {
-        private VertexList vList;
-        public Cube(VertexList vertexList)
+        private VertexList<Vertex> vList;
+        public Cube(VertexList<Vertex> vertexList)
         {
             this.vList = vertexList;
         }

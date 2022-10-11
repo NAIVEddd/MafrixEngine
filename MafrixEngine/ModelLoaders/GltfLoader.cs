@@ -81,15 +81,17 @@ namespace MafrixEngine.ModelLoaders
         }
     }
 
-    public class VertexList
+    public class VertexList<T> where T : IVertexData
     {
-        Dictionary<Vertex, uint> vertexMap = new Dictionary<Vertex, uint>();
-        List<Vertex> verticesList = new List<Vertex>();
+        Dictionary<T, uint> vertexMap = new Dictionary<T, uint>();
+        List<T> verticesList = new List<T>();
         List<uint> indicesList = new List<uint>();
 
-        public Vertex[] GetVertices { get { return verticesList.ToArray(); } }
+        public T[] GetVertices { get { return verticesList.ToArray(); } }
         public uint[] GetIndices { get { return indicesList.ToArray(); } }
-        public uint Add(Vertex vertex)
+        public uint GetVertexCount { get { return (uint)verticesList.Count; } }
+        public uint GetIndexCount { get { return (uint)indicesList.Count; } }
+        public uint Add(T vertex)
         {
             if (vertexMap.TryGetValue(vertex, out var meshIndex))
             {
@@ -100,10 +102,16 @@ namespace MafrixEngine.ModelLoaders
             {
                 var newIndex = (uint)verticesList.Count;
                 indicesList.Add((uint)newIndex);
-                vertexMap[vertex] = (uint)vertexMap.Count;
+                vertexMap[vertex] = (uint)verticesList.Count;
                 verticesList.Add(vertex);
                 return newIndex;
             }
+        }
+
+        public void Add(VertexList<T> vertexList)
+        {
+            verticesList.AddRange(vertexList.verticesList);
+            indicesList.AddRange(vertexList.indicesList);
         }
     }
 

@@ -163,6 +163,8 @@ namespace MafrixEngine.GraphicsWrapper
             return Marshal.SizeOf<T>() * array.Length;
         }
 
+        public Gltf2Animation[] animations;
+
         public HardwareInput input;
         private KeyboardMapping kbMap;
         private MouseMapping mouseMap;
@@ -220,8 +222,6 @@ namespace MafrixEngine.GraphicsWrapper
             CreateFramebuffers();
             LoadModel();
             CreateTextureSampler();
-            CreateVertexBuffer();
-            CreateIndexBuffer();
             CreateUniformBuffers();
             CreateDescriptorPool();
             CreateDescriptorSets();
@@ -241,7 +241,7 @@ namespace MafrixEngine.GraphicsWrapper
             //                new ProjectInfo(45.0f, (float)swapchainExtent.Width / (float)swapchainExtent.Height));
 
             // Voxel model camera
-            var pos = new Vec3(15.0f, 20.0f, 15.0f);
+            var pos = new Vec3(15.0f, 15.0f, 15.0f);
             var dir = new Vec3(0, 0, 0) - pos;
             camera = new Camera(new CameraCoordinate(pos, dir, new Vec3(0.0f, -1.0f, 0.0f)),
                             new ProjectInfo(45.0f, (float)swapchainExtent.Width / (float)swapchainExtent.Height));
@@ -309,6 +309,7 @@ namespace MafrixEngine.GraphicsWrapper
             }
             imagesInFlight[imageIndex] = fence;
 
+            animations?[0].Update(obj);
             UpdateUniformBuffer(imageIndex);
 
             SubmitInfo submitInfo = new SubmitInfo { SType = StructureType.SubmitInfo };
@@ -713,7 +714,8 @@ namespace MafrixEngine.GraphicsWrapper
         {
             // parse DescriptorSetLayout from shader.spirv
             var shaderDefines = new ShaderDefine[2];
-            shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit, true);
+            //shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit, true);
+            shaderDefines[0] = new ShaderDefine("./Shaders/gltfSkining.vert.spv", ShaderStageFlags.VertexBit);
             shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit, true);
             // using some class to simplfy pipeline create
             var pipelineInfos = new PipelineInfo(vkContext, shaderDefines);
@@ -733,7 +735,8 @@ namespace MafrixEngine.GraphicsWrapper
                 ColorComponentFlags.BBit |
                 ColorComponentFlags.ABit, false);
             pipelineBuilder.BindColorBlendState(masks);
-            pipelineBuilder.BindVertexInput<Vertex>(default);
+            //pipelineBuilder.BindVertexInput<Vertex>(default);
+            pipelineBuilder.BindVertexInput<AnimatedVertex>(default);
             pipelineBuilder.BindRenderPass(renderPass, 0);
             pipelineBuilder.BindPlipelineLayout(pipelineInfos.Layout);
             pipelineBuilder.BindShaderStages(pipelineInfos.pipelineShaderStageCreateInfos);
@@ -1091,11 +1094,13 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void LoadModel()
         {
-            var modelPathNames = new ValueTuple<string, string>[]
+            // (path, name, animationIndex)
+            var modelPathNames = new ValueTuple<string, string, int>[]
             {
-                ("Asserts/facial_body", "scene.gltf"),
-                //("Asserts/sponza", "Sponza.gltf"),
-                //("Asserts/gaz-66", "scene.gltf")
+                //("Asserts/CesiumMan/glTF", "CesiumMan.gltf", 0),
+                ("Asserts/facial_body", "scene.gltf", 1),
+                //("Asserts/sponza", "Sponza.gltf", -1),
+                //("Asserts/gaz-66", "scene.gltf", -1)
             };
 
             // load model
@@ -1106,12 +1111,28 @@ namespace MafrixEngine.GraphicsWrapper
                 meshes[i] = new Mesh(vk, device);
 
                 /// gltf load model
-                var (path, name) = modelPathNames[i];
+                var (path, name, animIndex) = modelPathNames[i];
                 var loader = new Gltf2Loader(path, name);
-                var gltf2 = loader.Parse(vkContext, stCommand, staging);
-                meshes[i].vertices = gltf2.vertices;
-                meshes[i].indices = gltf2.indices;
-                meshes[i].model = gltf2;
+                if(animIndex > -1)  // animated model
+                {
+                    animations = loader.ParseAnimation(vkContext, stCommand, staging);
+                    meshes[i].model = animations[0];
+                    animations[0].UpdateBuffer = UpdateBufferData;
+                    CreateBuffers(BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                        animations[0].jointsInverseMatrix,
+                        out animations[0].skinBuffer, out animations[0].skinMemory);
+                    CreateVertexBuffer(i, animations[0].vertexBuffer);
+                    CreateIndexBuffer(i, animations[0].indexBuffer);
+                }
+                else
+                {
+                    var gltf2 = loader.Parse(vkContext, stCommand, staging);
+                    meshes[i].vertices = gltf2.vertices;
+                    meshes[i].indices = gltf2.indices;
+                    meshes[i].model = gltf2;
+                    CreateVertexBuffer(i, meshes[i].vertices);
+                    CreateIndexBuffer(i, meshes[i].indices);
+                }
 
                 /// voxel load model
                 //var voxel = new VoxelLoader();
@@ -1127,6 +1148,24 @@ namespace MafrixEngine.GraphicsWrapper
             //meshes[0].frameRotate = Scalar.DegreesToRadians<float>(0.0f);
             //meshes[1].matrix = Matrix4X4.CreateScale<float>(0.03f);
             //meshes[1].frameRotate = Scalar.DegreesToRadians<float>(77.0f);
+        }
+
+        private unsafe void CreateVertexBuffer<T>(int m, T[] vertices) where T : unmanaged, IVertexData
+        {
+            ulong bufferSize = (ulong)0;
+
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+
+            bufferSize = (ulong)GetArrayByteSize(vertices);
+            CreateBuffer(bufferSize,
+                BufferUsageFlags.TransferDstBit |
+                BufferUsageFlags.VertexBufferBit,
+                MemoryPropertyFlags.DeviceLocalBit,
+                out meshes[m].vertexBuffer, out meshes[m].vertexBufferMemory);
+            fixed (void* ptr = vertices)
+            {
+                staging.CopyDataToBuffer(stCommand, meshes[m].vertexBuffer, ptr, (uint)bufferSize);
+            }
         }
 
         private unsafe void CreateVertexBuffer()
@@ -1150,24 +1189,54 @@ namespace MafrixEngine.GraphicsWrapper
             }
         }
 
-        private unsafe void CreateIndexBuffer()
+        public unsafe void UpdateVertexBuffer<T>(T[] vertices, int index) where T : unmanaged, IVertexData
+        {
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            var bufferSize = (ulong)GetArrayByteSize(vertices);
+            fixed (void* ptr = vertices)
+            {
+                staging.CopyDataToBuffer(stCommand, meshes[index].vertexBuffer, ptr, (uint)bufferSize);
+            }
+        }
+
+        public unsafe void CreateBuffers(BufferUsageFlags flag, Matrix4X4<float>[] data, out Buffer[] buffers, out DeviceMemory[] memories)
+        {
+            buffers = new Buffer[MaxFrameInFlight];
+            memories = new DeviceMemory[MaxFrameInFlight];
+            var bufferSize = (ulong)(Unsafe.SizeOf<Matrix4X4<float>>() * data.Length);
+            for (int i = 0; i < MaxFrameInFlight; i++)
+            {
+                CreateBuffer(bufferSize, flag,
+                    MemoryPropertyFlags.DeviceLocalBit,
+                    out buffers[i], out memories[i]);
+            }
+        }
+
+        public unsafe void UpdateBufferData(Matrix4X4<float>[] data, Buffer buffer)
+        {
+            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
+            var bufferSize = (ulong)(ulong)(Unsafe.SizeOf<Matrix4X4<float>>() * data.Length);
+            fixed (void* ptr = data)
+            {
+                staging.CopyDataToBuffer(stCommand, buffer, ptr, (uint)bufferSize);
+            }
+        }
+
+        private unsafe void CreateIndexBuffer(int m, uint[] indices)
         {
             ulong bufferSize = (ulong)0;
 
             var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
 
-            for(var m = 0; m < meshes.Length; m++)
+            bufferSize = (ulong)GetArrayByteSize(indices);
+            CreateBuffer(bufferSize,
+                BufferUsageFlags.TransferDstBit |
+                BufferUsageFlags.IndexBufferBit,
+                MemoryPropertyFlags.DeviceLocalBit,
+                out meshes[m].indicesBuffer, out meshes[m].indiceBufferMemory);
+            fixed (void* ptr = indices)
             {
-                bufferSize = (ulong)GetArrayByteSize(meshes[m].indices);
-                CreateBuffer(bufferSize,
-                    BufferUsageFlags.TransferDstBit |
-                    BufferUsageFlags.IndexBufferBit,
-                    MemoryPropertyFlags.DeviceLocalBit,
-                    out meshes[m].indicesBuffer, out meshes[m].indiceBufferMemory);
-                fixed (void* ptr = meshes[m].indices)
-                {
-                    staging.CopyDataToBuffer(stCommand, meshes[m].indicesBuffer, ptr, (uint)bufferSize);
-                }
+                staging.CopyDataToBuffer(stCommand, meshes[m].indicesBuffer, ptr, (uint)bufferSize);
             }
         }
 

@@ -70,11 +70,11 @@ namespace MafrixEngine.GraphicsWrapper
         }
 
         //public VkDescriptorWriter WriteBuffer(uint binding, DescriptorBufferInfo bufferInfo, DescriptorSet descriptorSet)
-        public VkDescriptorWriter WriteBuffer(uint binding, DescriptorBufferInfo bufferInfo)
+        public VkDescriptorWriter WriteBuffer(uint binding, DescriptorBufferInfo bufferInfo, DescriptorType bufferType = DescriptorType.UniformBuffer)
         {
             var write = new WriteDescriptorSet(StructureType.WriteDescriptorSet);
             write.DescriptorCount = 1;
-            write.DescriptorType = DescriptorType.UniformBuffer;
+            write.DescriptorType = bufferType;
             write.DstBinding = binding;
             //write.DstSet = descriptorSet;
             write.PBufferInfo = &bufferInfo;

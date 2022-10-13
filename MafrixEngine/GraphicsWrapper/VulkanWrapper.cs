@@ -43,10 +43,8 @@ namespace MafrixEngine.GraphicsWrapper
         public DeviceMemory[] uniformMemory;
         public Vertex[] vertices;
         public UInt32[] indices;
-        public Buffer vertexBuffer;
-        public DeviceMemory vertexBufferMemory;
-        public Buffer indicesBuffer;
-        public DeviceMemory indiceBufferMemory;
+        public VkBuffer vertexBuffer;
+        public VkBuffer indicesBuffer;
         public DescriptorPool descriptorPool;
         public DescriptorSet[] descriptorSets;
         public Mat4 matrix;
@@ -55,19 +53,17 @@ namespace MafrixEngine.GraphicsWrapper
 
         private Vk vk;
         private Device device;
-        public Mesh(Vk vk, Device device)
+        public Mesh(VkContext ctx)
         {
-            this.vk = vk;
-            this.device = device;
+            this.vk = ctx.vk;
+            this.device = ctx.device;
             matrices = default;
             uniformBuffer = default;
             uniformMemory = default;
             vertices = default;
             indices = default;
-            vertexBuffer = default;
-            vertexBufferMemory = default;
-            indicesBuffer = default;
-            indiceBufferMemory = default;
+            vertexBuffer = new VkBuffer(ctx);
+            indicesBuffer = new VkBuffer(ctx);
             descriptorPool = default;
             descriptorSets = default;
             matrix = default;
@@ -77,15 +73,14 @@ namespace MafrixEngine.GraphicsWrapper
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer, Action<int> action)
         {
-            model.BindCommand(vk, commandBuffer, vertexBuffer, indicesBuffer, action);
+            model.BindCommand(vk, commandBuffer, vertexBuffer.buffer, indicesBuffer.buffer, action);
         }
 
         public unsafe void Dispose()
         {
-            vk.FreeMemory(device, indiceBufferMemory, null);
-            vk.FreeMemory(device, vertexBufferMemory, null);
-            vk.DestroyBuffer(device, vertexBuffer, null);
-            vk.DestroyBuffer(device, indicesBuffer, null);
+            vertexBuffer.Dispose();
+            indicesBuffer.Dispose();
+
             foreach (var memory in uniformMemory)
             {
                 vk.FreeMemory(device, memory, null);
@@ -158,9 +153,9 @@ namespace MafrixEngine.GraphicsWrapper
 #else
         public const bool EnableValidationLayers = false;
 #endif
-        public unsafe static int GetArrayByteSize<T>(T[] array)
+        public unsafe static int GetArrayByteSize<T>(T[] array) where T : unmanaged
         {
-            return Marshal.SizeOf<T>() * array.Length;
+            return sizeof(T) * array.Length;
         }
 
         public Gltf2Animation[] animations;
@@ -1108,7 +1103,7 @@ namespace MafrixEngine.GraphicsWrapper
             meshes = new Mesh[modelPathNames.Length];
             for (var i = 0; i < modelPathNames.Length; i++)
             {
-                meshes[i] = new Mesh(vk, device);
+                meshes[i] = new Mesh(vkContext);
 
                 /// gltf load model
                 var (path, name, animIndex) = modelPathNames[i];
@@ -1119,8 +1114,7 @@ namespace MafrixEngine.GraphicsWrapper
                     meshes[i].model = animations[0];
                     animations[0].UpdateBuffer = UpdateBufferData;
                     CreateBuffers(BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                        animations[0].jointsInverseMatrix,
-                        out animations[0].skinBuffer, out animations[0].skinMemory);
+                            animations[0].jointsInverseMatrix, out animations[0].buffers);
                     CreateVertexBuffer(i, animations[0].vertexBuffer);
                     CreateIndexBuffer(i, animations[0].indexBuffer);
                 }
@@ -1152,92 +1146,35 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateVertexBuffer<T>(int m, T[] vertices) where T : unmanaged, IVertexData
         {
-            ulong bufferSize = (ulong)0;
-
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-
-            bufferSize = (ulong)GetArrayByteSize(vertices);
-            CreateBuffer(bufferSize,
+            ulong bufferSize = (ulong)GetArrayByteSize(vertices);
+            meshes[m].vertexBuffer.Init(bufferSize,
                 BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.VertexBufferBit,
-                MemoryPropertyFlags.DeviceLocalBit,
-                out meshes[m].vertexBuffer, out meshes[m].vertexBufferMemory);
-            fixed (void* ptr = vertices)
-            {
-                staging.CopyDataToBuffer(stCommand, meshes[m].vertexBuffer, ptr, (uint)bufferSize);
-            }
+                BufferUsageFlags.VertexBufferBit);
+            meshes[m].vertexBuffer.UpdateData(vertices, commandPool, graphicsQueue, staging);
         }
 
-        private unsafe void CreateVertexBuffer()
+        public unsafe void CreateBuffers<T>(BufferUsageFlags flag, T[] data, out VkBuffer[] buffers) where T : unmanaged
         {
-            ulong bufferSize = (ulong)0;
-
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-
-            for(var m = 0; m < meshes.Length; m++)
-            {
-                bufferSize = (ulong)GetArrayByteSize(meshes[m].vertices);
-                CreateBuffer(bufferSize,
-                    BufferUsageFlags.TransferDstBit |
-                    BufferUsageFlags.VertexBufferBit,
-                    MemoryPropertyFlags.DeviceLocalBit,
-                    out meshes[m].vertexBuffer, out meshes[m].vertexBufferMemory);
-                fixed (void* ptr = meshes[m].vertices)
-                {
-                    staging.CopyDataToBuffer(stCommand, meshes[m].vertexBuffer, ptr, (uint)bufferSize);
-                }
-            }
-        }
-
-        public unsafe void UpdateVertexBuffer<T>(T[] vertices, int index) where T : unmanaged, IVertexData
-        {
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-            var bufferSize = (ulong)GetArrayByteSize(vertices);
-            fixed (void* ptr = vertices)
-            {
-                staging.CopyDataToBuffer(stCommand, meshes[index].vertexBuffer, ptr, (uint)bufferSize);
-            }
-        }
-
-        public unsafe void CreateBuffers(BufferUsageFlags flag, Matrix4X4<float>[] data, out Buffer[] buffers, out DeviceMemory[] memories)
-        {
-            buffers = new Buffer[MaxFrameInFlight];
-            memories = new DeviceMemory[MaxFrameInFlight];
-            var bufferSize = (ulong)(Unsafe.SizeOf<Matrix4X4<float>>() * data.Length);
+            buffers = new VkBuffer[MaxFrameInFlight];
+            var bufferSize = (ulong)(sizeof(T) * data.Length);
             for (int i = 0; i < MaxFrameInFlight; i++)
             {
-                CreateBuffer(bufferSize, flag,
-                    MemoryPropertyFlags.DeviceLocalBit,
-                    out buffers[i], out memories[i]);
+                buffers[i] = new VkBuffer(vkContext, bufferSize, flag);
             }
         }
 
-        public unsafe void UpdateBufferData(Matrix4X4<float>[] data, Buffer buffer)
+        public void UpdateBufferData(Matrix4X4<float>[] data, VkBuffer buffer)
         {
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-            var bufferSize = (ulong)(ulong)(Unsafe.SizeOf<Matrix4X4<float>>() * data.Length);
-            fixed (void* ptr = data)
-            {
-                staging.CopyDataToBuffer(stCommand, buffer, ptr, (uint)bufferSize);
-            }
+            buffer.UpdateData(data, commandPool, graphicsQueue, staging);
         }
 
         private unsafe void CreateIndexBuffer(int m, uint[] indices)
         {
-            ulong bufferSize = (ulong)0;
-
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-
-            bufferSize = (ulong)GetArrayByteSize(indices);
-            CreateBuffer(bufferSize,
+            ulong bufferSize = (ulong)GetArrayByteSize(indices);
+            meshes[m].indicesBuffer.Init(bufferSize,
                 BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.IndexBufferBit,
-                MemoryPropertyFlags.DeviceLocalBit,
-                out meshes[m].indicesBuffer, out meshes[m].indiceBufferMemory);
-            fixed (void* ptr = indices)
-            {
-                staging.CopyDataToBuffer(stCommand, meshes[m].indicesBuffer, ptr, (uint)bufferSize);
-            }
+                BufferUsageFlags.IndexBufferBit);
+            meshes[m].indicesBuffer.UpdateData(indices, commandPool, graphicsQueue, staging);
         }
 
         private unsafe void CreateUniformBuffers()

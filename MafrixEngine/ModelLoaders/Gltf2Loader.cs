@@ -710,9 +710,10 @@ namespace MafrixEngine.ModelLoaders
         public float timeMax;
         public float currentTime;
         public Matrix4X4<float>[] jointsInverseMatrix;
-        public VulkanBuffer[] skinBuffer;
-        public DeviceMemory[] skinMemory;
-        public Action<Matrix4X4<float>[], VulkanBuffer> UpdateBuffer;
+        public VkBuffer[] buffers;
+        //public VulkanBuffer[] skinBuffer;
+        //public DeviceMemory[] skinMemory;
+        public Action<Matrix4X4<float>[], VkBuffer> UpdateBuffer;
         public Gltf2Animation(Gltf2Loader loader, Gltf gltf, int index)
         {
             vkContext = loader.vkContext;
@@ -816,13 +817,9 @@ namespace MafrixEngine.ModelLoaders
         public unsafe void Dispose()
         {
             rootNode?.Dispose();
-            foreach (var item in skinMemory)
+            foreach(var item in buffers)
             {
-                vkContext.vk.FreeMemory(vkContext.device, item, null);
-            }
-            foreach (var item in skinBuffer)
-            {
-                vkContext.vk.DestroyBuffer(vkContext.device, item, null);
+                item.Dispose();
             }
         }
 
@@ -859,9 +856,9 @@ namespace MafrixEngine.ModelLoaders
                 jointsInverseMatrix[i] = mat;
             }
 
-            for (int i = 0; i < skinBuffer.Length; i++)
+            for (int i = 0; i < buffers.Length; i++)
             {
-                UpdateBuffer(jointsInverseMatrix, skinBuffer[i]);
+                UpdateBuffer(jointsInverseMatrix, buffers[i]);
             }
             for (int i = 0; i < rootNode.meshes.Length; i++)
             {
@@ -896,7 +893,7 @@ namespace MafrixEngine.ModelLoaders
         {
             rootNode.UpdateDescriptorSets(vkContext, sampler, descriptorSets, buffer, start);
             var writer = new VkDescriptorWriter(vkContext, 1, 0);
-            writer.WriteBuffer(4, new DescriptorBufferInfo(skinBuffer[start], 0, (ulong)(Unsafe.SizeOf<Matrix4X4<float>>() * jointsInverseMatrix.Length)), DescriptorType.StorageBuffer);
+            writer.WriteBuffer(4, new DescriptorBufferInfo(buffers[start].buffer, 0, (ulong)(Unsafe.SizeOf<Matrix4X4<float>>() * jointsInverseMatrix.Length)), DescriptorType.StorageBuffer);
             writer.Write(descriptorSets[start]);
         }
 

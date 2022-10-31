@@ -28,10 +28,12 @@ using Mesh = glTFLoader.Schema.Mesh;
 using Silk.NET.Input;
 using System.Collections;
 using MafrixEngine.Source.Interface;
+using MafrixEngine.Source.DataStruct;
 using static glTFLoader.Schema.AnimationChannelTarget;
 
 namespace MafrixEngine.ModelLoaders
 {
+    using Camera = Cameras.Camera;
     public class Gltf2Buffer
     {
         public byte[] buffer;
@@ -892,7 +894,7 @@ namespace MafrixEngine.ModelLoaders
         public unsafe void UpdateDescriptorSets(VkContext vkContext, VulkanSampler sampler, DescriptorSet[] descriptorSets, VulkanBuffer[] buffer, int start)
         {
             rootNode.UpdateDescriptorSets(vkContext, sampler, descriptorSets, buffer, start);
-            var writer = new VkDescriptorWriter(vkContext, 1, 0);
+            var writer = new VkOldDescriptorWriter(vkContext, 1, 0);
             writer.WriteBuffer(4, new DescriptorBufferInfo(buffers[start].buffer, 0, (ulong)(Unsafe.SizeOf<Matrix4X4<float>>() * jointsInverseMatrix.Length)), DescriptorType.StorageBuffer);
             writer.Write(descriptorSets[start]);
         }
@@ -1008,6 +1010,240 @@ namespace MafrixEngine.ModelLoaders
         }
     }
 
+    public class GltfRHIAssert : IDisposable
+    {
+        private VkBuffer buffer;
+        private VulkanSampler sampler;
+        private Gltf2Material material;
+
+        public GltfRHIAssert(VkBuffer buffer, VulkanSampler sampler, Gltf2Material material)
+        {
+            this.buffer = buffer;
+            this.sampler = sampler;
+            this.material = material;
+        }
+
+        public void InitializeDescriptorSet(VkDescriptorWriter writer)
+        {
+            writer.WriteBuffer(0, 0, new DescriptorBufferInfo(buffer.buffer, 0, (ulong)Unsafe.SizeOf<UniformBufferObject>()));
+            writer.WriteImage(0, 1, new DescriptorImageInfo(sampler, material.baseTexture.imageView, ImageLayout.ShaderReadOnlyOptimal));
+            writer.WriteImage(0, 2, new DescriptorImageInfo(sampler, material.metallicTexture.imageView, ImageLayout.ShaderReadOnlyOptimal));
+            writer.WriteImage(0, 3, new DescriptorImageInfo(sampler, material.normalTexture.imageView, ImageLayout.ShaderReadOnlyOptimal));
+            writer.Write();
+        }
+
+        public void UpdateDescriptorSet(VkDescriptorWriter writer)
+        {
+
+        }
+
+        public unsafe void UpdateBuffer<T>(VkContext vkCtx, T data) where T : unmanaged
+        {
+            var datasize = (uint)Unsafe.SizeOf<T>();
+            void* dstPtr = null;
+            vkCtx.vk.MapMemory(vkCtx.device, buffer.memory, 0, datasize, 0, ref dstPtr);
+            Unsafe.CopyBlock(dstPtr, &data, (uint)datasize);
+            vkCtx.vk.UnmapMemory(vkCtx.device, buffer.memory);
+        }
+
+        public unsafe void UpdateBuffer<T>(T data, SingleTimeCommand stCommand, StagingBuffer staging) where T : unmanaged
+        {
+            buffer.UpdateData(data, stCommand, staging);
+        }
+
+        public void Dispose()
+        {
+            buffer.Dispose();
+        }
+    }
+
+    public class GltfRHIAssertInfo : IDisposable //<T> //<MeshAssert>
+    {
+        private VkDescriptorPool pool;
+        private int primitiveCount;
+        private GltfRHIAssert[] asserts;
+        public GltfRHIAssertInfo(VkDescriptorPool pool, int primitiveCount)
+        {
+            this.pool = pool;
+            this.primitiveCount = primitiveCount;
+            this.asserts = new GltfRHIAssert[primitiveCount];
+        }
+
+        public GltfRHIAssert GetAssert(int index)
+        {
+            return asserts[index];
+        }
+
+        public void SetAssert(int index, GltfRHIAssert assert)
+        {
+            asserts[index] = assert;
+        }
+
+        public void InitializeDescriptorSet(int frameIndex)
+        {
+            for (int i = 0; i < primitiveCount; i++)
+            {
+                var writer = pool.GetDescriptorWriter(frameIndex, i);
+                asserts[i].InitializeDescriptorSet(writer);
+            }
+        }
+
+        public void UpdateDescriptorSet(int frameIndex)
+        {
+            for (int i = 0; i < primitiveCount; i++)
+            {
+                var writer = pool.GetDescriptorWriter(frameIndex, i);
+                asserts[i].UpdateDescriptorSet(writer);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var s in asserts)
+            {
+                s.Dispose();
+            }
+        }
+    }
+
+    public class GltfAssertInfo : IDisposable
+    {
+        private Gltf2RootNode node;
+        private VkContext vkContext;
+        private VulkanSampler sampler;
+        private SingleTimeCommand stCommand;
+        private StagingBuffer staging;
+        private UniformBufferObject[] uniforms;
+        public VkBuffer vertexBuffer;
+        public VkBuffer indicesBuffer;
+        public GltfRHIAssertInfo assertInfo;
+        public VkDescriptorPool pool;
+
+        public GltfAssertInfo(VkContext vkContext, SingleTimeCommand stCommand, StagingBuffer staging)
+        {
+            this.vkContext = vkContext;
+            this.stCommand = stCommand;
+            this.staging = staging;
+            vertexBuffer = new VkBuffer(vkContext);
+            indicesBuffer = new VkBuffer(vkContext);
+            pool = default;
+        }
+
+        public unsafe void Initialize(Gltf2RootNode node,
+            DescriptorSetLayout[] setLayouts, DescriptorPoolSize[] poolSizes, int frameCount)
+        {
+            this.node = node;
+            uniforms = new UniformBufferObject[node.DescriptorSetCount];
+            var prims = node.DescriptorSetCount;
+            pool = new VkDescriptorPool(vkContext, frameCount);
+            pool.Initialize(setLayouts, poolSizes, prims);
+
+            assertInfo = new GltfRHIAssertInfo(pool, prims);
+            // ToDo: IndexedBuffer
+            var uniformBuffer = CreateUniformBuffer(node, 1);
+            sampler = CreateTextureSampler();
+            for (int i = 0; i < prims; i++)
+            {
+                var assert = new GltfRHIAssert(uniformBuffer[i], sampler, node.materials[node.meshes[0].primitives[i].materialIndex]);
+                assertInfo.SetAssert(i, assert);
+            }
+
+            CreateVertexBuffer(node.vertices);
+            CreateIndexBuffer(node.indices);
+
+            for (int i = 0; i < frameCount; i++)
+            {
+                assertInfo.InitializeDescriptorSet(i);
+            }
+        }
+
+        public void Update(Camera camera, int frameIndex)
+        {
+            node.UpdateUniformBuffer(out var matrices);
+            camera.GetProjAndView(out var proj, out var view);
+
+            Debug.Assert(matrices.Length == uniforms.Length);
+
+            for (int i = 0; i < uniforms.Length; i++)
+            {
+                uniforms[i].proj = proj;
+                uniforms[i].view = view;
+                //uniforms[i].model = matrices[i];
+                uniforms[i].model = Matrix4X4<float>.Identity;
+                //assertInfo.GetAssert(i).UpdateBuffer(vkContext, uniforms[i]);
+                assertInfo.GetAssert(i).UpdateBuffer(uniforms[i], stCommand, staging);
+            }
+
+            assertInfo.UpdateDescriptorSet(frameIndex);
+        }
+
+        private VkBuffer[] CreateUniformBuffer(Gltf2RootNode node, int frameCount)
+        {
+            var setCount = frameCount * node.DescriptorSetCount;
+            ulong bufferSize = (ulong)(Unsafe.SizeOf<UniformBufferObject>());
+            var uniformBuffers = new VkBuffer[setCount];
+            for (int i = 0; i < setCount; i++)
+            {
+                uniformBuffers[i] = new VkBuffer(vkContext, true);
+                uniformBuffers[i].Init(bufferSize, BufferUsageFlags.UniformBufferBit | BufferUsageFlags.TransferDstBit);
+            }
+            return uniformBuffers;
+        }
+
+        private unsafe VulkanSampler CreateTextureSampler()
+        {
+            vkContext.vk.GetPhysicalDeviceProperties(vkContext.physicalDevice, out var properties);
+            var samplerInfo = new SamplerCreateInfo(StructureType.SamplerCreateInfo);
+            samplerInfo.MagFilter = Filter.Linear;
+            samplerInfo.MinFilter = Filter.Linear;
+            samplerInfo.AddressModeU = SamplerAddressMode.Repeat;
+            samplerInfo.AddressModeV = SamplerAddressMode.Repeat;
+            samplerInfo.AddressModeW = SamplerAddressMode.Repeat;
+            samplerInfo.AnisotropyEnable = Vk.True;
+            samplerInfo.MaxAnisotropy = properties.Limits.MaxSamplerAnisotropy;
+            samplerInfo.BorderColor = BorderColor.IntOpaqueBlack;
+            samplerInfo.UnnormalizedCoordinates = Vk.False;
+            samplerInfo.CompareEnable = Vk.False;
+            samplerInfo.CompareOp = CompareOp.Always;
+            samplerInfo.MipmapMode = SamplerMipmapMode.Linear;
+            samplerInfo.MipLodBias = 0.0f;
+            samplerInfo.MinLod = 0.0f;
+            samplerInfo.MaxLod = 0.0f;
+            if (vkContext.vk.CreateSampler(vkContext.device, samplerInfo, null, out var textureSampler) != Result.Success)
+            {
+                throw new Exception("failed to create texture sampler.");
+            }
+            return textureSampler;
+        }
+
+        private unsafe void CreateVertexBuffer<T>(T[] vertices) where T : unmanaged, IVertexData
+        {
+            ulong bufferSize = (ulong)(sizeof(T) * vertices.Length);
+            vertexBuffer.Init(bufferSize,
+                BufferUsageFlags.TransferDstBit |
+                BufferUsageFlags.VertexBufferBit);
+            vertexBuffer.UpdateData(vertices, stCommand, staging);
+        }
+
+        private unsafe void CreateIndexBuffer(uint[] indices)
+        {
+            ulong bufferSize = (ulong)(indices.Length * sizeof(uint));
+            indicesBuffer.Init(bufferSize,
+                BufferUsageFlags.TransferDstBit |
+                BufferUsageFlags.IndexBufferBit);
+            indicesBuffer.UpdateData(indices, stCommand, staging);
+        }
+
+        public unsafe void Dispose()
+        {
+            vertexBuffer.Dispose();
+            indicesBuffer.Dispose();
+            assertInfo.Dispose();
+            vkContext.vk.DestroySampler(vkContext.device, sampler, null);
+            pool.Dispose();
+        }
+    }
+
     public class Gltf2Node
     {
         // localTransform = translationMatrix * rotationMatrix * scaleMatrix
@@ -1051,16 +1287,39 @@ namespace MafrixEngine.ModelLoaders
         public Gltf2Material[] materials;
         public Gltf2Mesh[] meshes;
 
-        public int DescriptorSetCount { get
+        public int descriptorSetCount;
+        public int DescriptorSetCount { get => descriptorSetCount; set => descriptorSetCount = value; }
+
+        public Gltf2RootNode(Vertex[] vertices, uint[] indices, int[] sceneNodesIdx, Gltf2Node[] sceneNodes, Gltf2Node[] nodes, Gltf2Texture[] textures, Gltf2Material[] materials, Gltf2Mesh[] meshes)
+        {
+            this.vertices = vertices;
+            this.indices = indices;
+            this.sceneNodesIdx = sceneNodesIdx;
+            this.sceneNodes = sceneNodes;
+            this.nodes = nodes;
+            this.textures = textures;
+            this.materials = materials;
+            this.meshes = meshes;
+
+            descriptorSetCount = 0;
+            foreach (var n in sceneNodes)
             {
-                var count = 0;
-                for (var i = 0; i < this.meshes.Length; i++)
-                {
-                    count += this.meshes[i].primitives.Length;
-                }
-                return count;
+                GetCount(n, ref descriptorSetCount);
             }
-            set { }
+            void GetCount(Gltf2Node node, ref int count)
+            {
+                if (node.mesh.HasValue)
+                {
+                    count += meshes[node.mesh.Value].primitives.Length;
+                }
+                if(node.childrens != null)
+                {
+                    foreach (var c in node.childrens)
+                    {
+                        GetCount(nodes[c], ref count);
+                    }
+                }
+            }
         }
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer,
@@ -1199,7 +1458,7 @@ namespace MafrixEngine.ModelLoaders
                     var prim = mesh.primitives[i];
                     var material = materials[prim.materialIndex];
 
-                    var writer = new VkDescriptorWriter(vkContext, 1, 3);
+                    var writer = new VkOldDescriptorWriter(vkContext, 1, 3);
                     writer.WriteBuffer(0, new DescriptorBufferInfo(buffer[offset + i], 0, (ulong)Unsafe.SizeOf<UniformBufferObject>()));
                     var imageInfos = new DescriptorImageInfo[]
                     {
@@ -1430,7 +1689,7 @@ namespace MafrixEngine.ModelLoaders
                     var prim = mesh.primitives[i];
                     var material = materials[prim.materialIndex];
 
-                    var writer = new VkDescriptorWriter(vkContext, 1, 3);
+                    var writer = new VkOldDescriptorWriter(vkContext, 1, 3);
                     writer.WriteBuffer(0, new DescriptorBufferInfo(buffer[offset + i], 0, (ulong)Unsafe.SizeOf<UniformBufferObject>()));
                     var imageInfos = new DescriptorImageInfo[]
                     {
@@ -1567,20 +1826,14 @@ namespace MafrixEngine.ModelLoaders
             }
 
             var scene = gltf.Scenes[gltf.Scene!.Value];
-
-            var rootNode = new Gltf2RootNode();
-            rootNode.vertices = vertexList.GetVertices;
-            rootNode.textures = textures;
-            rootNode.indices = vertexList.GetIndices;
-            rootNode.materials = materials;
-            rootNode.meshes = meshes;
-            rootNode.nodes = nodes;
-            rootNode.sceneNodes = new Gltf2Node[scene.Nodes.Length];
+            var sceneNodes = new Gltf2Node[scene.Nodes.Length];
             for (int i = 0; i < scene.Nodes.Length; i++)
             {
-                rootNode.sceneNodes[i] = nodes[scene.Nodes[i]];
+                sceneNodes[i] = nodes[scene.Nodes[i]];
             }
-            rootNode.sceneNodesIdx = scene.Nodes;
+
+            var rootNode = new Gltf2RootNode(vertexList.GetVertices, vertexList.GetIndices,
+                scene.Nodes, sceneNodes, nodes, textures, materials, meshes);
 
             //for (int i = 0; i < rootNode.sceneNodes.Length; i++)
             //{

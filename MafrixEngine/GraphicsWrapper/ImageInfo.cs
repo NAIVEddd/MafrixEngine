@@ -66,4 +66,9 @@ namespace MafrixEngine.GraphicsWrapper
             vk.FreeMemory(device, imageMemory, null);
         }
     }
+
+    public class VkImageView
+    {
+
+    }
 }

@@ -41,6 +41,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Folder Include="Source\Render\" />
+    <Folder Include="Source\Animation\" />
+    <Folder Include="Source\Physics\" />
+    <Folder Include="Source\Window\" />
     <Folder Include="Textures\" />
     <Folder Include="Asserts\" />
   </ItemGroup>
@@ -342,6 +346,15 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Shaders\gltfSkining.vert.spv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Shaders\scene.frag.spv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Shaders\scene.vert.spv">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Shaders\ShadowOffscreen.vert.spv">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Textures\lim.PNG">

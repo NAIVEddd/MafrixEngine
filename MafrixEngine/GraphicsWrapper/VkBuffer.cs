@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
@@ -9,6 +10,7 @@ using Silk.NET.Vulkan;
 using Silk.NET.Vulkan.Extensions.EXT;
 using Silk.NET.Vulkan.Extensions.KHR;
 using Buffer = Silk.NET.Vulkan.Buffer;
+using Queue = Silk.NET.Vulkan.Queue;
 
 namespace MafrixEngine.GraphicsWrapper
 {
@@ -18,35 +20,63 @@ namespace MafrixEngine.GraphicsWrapper
         public ulong bufferSize;
         public Buffer buffer;
         public DeviceMemory memory;
+        private bool isFast;
 
-        public VkBuffer(VkContext ctx)
+        public VkBuffer(VkContext ctx, bool fastMode = false)
         {
             vkContext = ctx;
             bufferSize = 0;
+            isFast = fastMode;
         }
 
-        public VkBuffer(VkContext ctx, ulong bufSize, BufferUsageFlags flag)
+        public VkBuffer(VkContext ctx, ulong bufSize, BufferUsageFlags flag, bool fastMode = false)
         {
             vkContext = ctx;
             bufferSize = bufSize;
-            CreateBuffer(bufSize, flag, MemoryPropertyFlags.DeviceLocalBit,
-                out buffer, out memory);
+            isFast = fastMode;
+            if (isFast)
+            {
+                CreateBuffer(bufferSize, flag, MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit,
+                    out buffer, out memory);
+            }
+            else
+            {
+                CreateBuffer(bufferSize, flag, MemoryPropertyFlags.DeviceLocalBit,
+                    out buffer, out memory);
+            }
         }
 
         public unsafe void Init(ulong bufSize, BufferUsageFlags flag)
         {
             Debug.Assert(bufferSize == 0);
             bufferSize = bufSize;
-            CreateBuffer(bufferSize, flag, MemoryPropertyFlags.DeviceLocalBit,
-                out buffer, out memory);
+            if(isFast)
+            {
+                CreateBuffer(bufferSize, flag, MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit,
+                    out buffer, out memory);
+            }
+            else
+            {
+                CreateBuffer(bufferSize, flag, MemoryPropertyFlags.DeviceLocalBit,
+                    out buffer, out memory);
+            }
+            
         }
 
         public unsafe void Init<T>(T[] data, BufferUsageFlags flag) where T : unmanaged
         {
             Debug.Assert(bufferSize == 0);
             bufferSize = (ulong)(sizeof(T) * data.Length);
-            CreateBuffer(bufferSize, flag, MemoryPropertyFlags.DeviceLocalBit,
-                out buffer, out memory);
+            if (isFast)
+            {
+                CreateBuffer(bufferSize, flag, MemoryPropertyFlags.HostVisibleBit | MemoryPropertyFlags.HostCoherentBit,
+                    out buffer, out memory);
+            }
+            else
+            {
+                CreateBuffer(bufferSize, flag, MemoryPropertyFlags.DeviceLocalBit,
+                    out buffer, out memory);
+            }
         }
 
         public unsafe void UpdateData<T>(T[] data, CommandPool pool, Queue queue, StagingBuffer stage) where T : unmanaged
@@ -54,10 +84,66 @@ namespace MafrixEngine.GraphicsWrapper
             Debug.Assert(bufferSize > 0);
             Debug.Assert((ulong)(sizeof(T) * data.Length) <= bufferSize);
 
-            var stCommand = new SingleTimeCommand(vk, device, pool, queue);
-            fixed (void* ptr = data)
+            if(isFast)
             {
-                stage.CopyDataToBuffer(stCommand, buffer, ptr, (uint)bufferSize);
+                void* dstPtr = null;
+                fixed (void* srcPtr = data)
+                {
+                    vk.MapMemory(device, memory, 0, (uint)bufferSize, 0, ref dstPtr);
+                    Unsafe.CopyBlock(dstPtr, srcPtr, (uint)(uint)bufferSize);
+                    vk.UnmapMemory(device, memory);
+                }
+                
+            }
+            else
+            {
+                var stCommand = new SingleTimeCommand(vk, device, pool, queue);
+                fixed (void* ptr = data)
+                {
+                    stage.CopyDataToBuffer(stCommand, buffer, ptr, (uint)bufferSize);
+                }
+            }
+        }
+
+        public unsafe void UpdateData<T>(T data, SingleTimeCommand stCommand, StagingBuffer stage) where T : unmanaged
+        {
+            Debug.Assert(bufferSize > 0);
+            Debug.Assert((ulong)sizeof(T) <= bufferSize);
+
+            if (isFast)
+            {
+                void* dstPtr = null;
+                vk.MapMemory(device, memory, 0, (uint)bufferSize, 0, ref dstPtr);
+                Unsafe.CopyBlock(dstPtr, &data, (uint)(uint)bufferSize);
+                vk.UnmapMemory(device, memory);
+            }
+            else
+            {
+                stage.CopyDataToBuffer(stCommand, buffer, &data, (uint)bufferSize);
+            }
+        }
+
+        public unsafe void UpdateData<T>(T[] data, SingleTimeCommand stCommand, StagingBuffer stage) where T : unmanaged
+        {
+            Debug.Assert(bufferSize > 0);
+            Debug.Assert((ulong)(sizeof(T) * data.Length) <= bufferSize);
+
+            if (isFast)
+            {
+                void* dstPtr = null;
+                fixed (void* srcPtr = data)
+                {
+                    vk.MapMemory(device, memory, 0, (uint)bufferSize, 0, ref dstPtr);
+                    Unsafe.CopyBlock(dstPtr, srcPtr, (uint)(uint)bufferSize);
+                    vk.UnmapMemory(device, memory);
+                }
+            }
+            else
+            {
+                fixed (void* ptr = data)
+                {
+                    stage.CopyDataToBuffer(stCommand, buffer, ptr, (uint)bufferSize);
+                }
             }
         }
 

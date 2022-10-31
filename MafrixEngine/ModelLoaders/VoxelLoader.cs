@@ -21,6 +21,7 @@ using Serilog.Core;
 using ThirdPartyLib;
 using System.Drawing;
 using MafrixEngine.Source.Interface;
+using MafrixEngine.Source.DataStruct;
 
 namespace MafrixEngine.ModelLoaders
 {
@@ -138,7 +139,7 @@ namespace MafrixEngine.ModelLoaders
             Sampler sampler,
             DescriptorSet[] descriptorSets, Buffer[] buffer, int start)
         {
-            var writer = new VkDescriptorWriter(vkContext, 1, 3);
+            var writer = new VkOldDescriptorWriter(vkContext, 1, 3);
             writer.WriteBuffer(0, new DescriptorBufferInfo(buffer[start], 0, (ulong)Unsafe.SizeOf<UniformBufferObject>()));
             var imageInfos = new DescriptorImageInfo[]
             {

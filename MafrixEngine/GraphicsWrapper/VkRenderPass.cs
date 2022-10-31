@@ -17,11 +17,22 @@ using SixLabors.ImageSharp.Advanced;
 using SixLabors.ImageSharp.PixelFormats;
 using MafrixEngine.ModelLoaders;
 using MafrixEngine.Source.Interface;
+using System.Diagnostics;
 
 namespace MafrixEngine.GraphicsWrapper
 {
-    public class VkRenderPass
+    public class VkRenderPass : IDisposable
     {
+        private VkContext vkContext;
+        public VkRenderPass(VkContext vkContext)
+        {
+            this.vkContext = vkContext;
+        }
+
+        public void Dispose()
+        {
+            throw new NotImplementedException();
+        }
     }
 
     public class VkSubpass
@@ -42,6 +53,63 @@ namespace MafrixEngine.GraphicsWrapper
         }
     }
 
+    public class VkSubpassDesc
+    {
+        public SubpassDescriptionFlags flag = SubpassDescriptionFlags.None;
+        public PipelineBindPoint bindPoint;
+        public List<int> inputAttachmentRef = new List<int>();
+        public List<int> colorAttachmentRef = new List<int>();
+        public int DepthStencilAttachmentRef { get; set; }
+        public List<int> preserveAttachmentRef = new List<int>();
+        public void AddInputAttachment(int idx)
+        {
+            inputAttachmentRef.Add(idx);
+        }
+        public void AddColorAttachment(int idx)
+        {
+            colorAttachmentRef.Add(idx);
+        }
+        public void AddPreserveAttachment(int idx)
+        {
+            preserveAttachmentRef.Add(idx);
+        }
+        public unsafe SubpassDescription Build(AttachmentDescription[] attachments)
+        {
+            var desc = new SubpassDescription();
+            desc.PipelineBindPoint = PipelineBindPoint.Graphics;
+
+            var colorAttachments = new AttachmentReference[colorAttachmentRef.Count];
+            if (colorAttachmentRef.Count > 0)
+            {
+                desc.ColorAttachmentCount = (uint)colorAttachmentRef.Count;
+                var i = 0;
+                foreach (var item in colorAttachmentRef)
+                {
+                    colorAttachments[i].Attachment = (uint)item;
+                    colorAttachments[i].Layout = ImageLayout.ColorAttachmentOptimal;
+                    i++;
+                }
+                fixed(AttachmentReference* ptr = colorAttachments)
+                {
+                    desc.PColorAttachments = ptr;
+                }
+            }
+            else
+            {
+                desc.ColorAttachmentCount = 0;
+                desc.PColorAttachments = null;
+            }
+            var depthAttachment = new AttachmentReference[1];
+            depthAttachment[0] = new AttachmentReference((uint)DepthStencilAttachmentRef, ImageLayout.DepthStencilAttachmentOptimal);
+            fixed(AttachmentReference* ptr = depthAttachment)
+            {
+                desc.PDepthStencilAttachment = ptr;
+            }
+
+            return desc;
+        }
+    }
+
     public class VkRenderPassBuilder
     {
         private RenderPassCreateInfo renderPassCreateInfo;
@@ -52,7 +120,12 @@ namespace MafrixEngine.GraphicsWrapper
         {
             this.vk = vk;
             this.device = device;
+            renderPassCreateInfo = new RenderPassCreateInfo();
             renderPassCreateInfo.SType = StructureType.RenderPassCreateInfo;
+            attachmentDescriptions = new List<AttachmentDescription>();
+            subpassDescriptions = new List<VkSubpassDesc>();
+            subpasses = new List<VkPipelineBuilder>();
+            subpassDependencies = new List<SubpassDependency>();
         }
 
         private List<AttachmentDescription> attachmentDescriptions;
@@ -62,10 +135,17 @@ namespace MafrixEngine.GraphicsWrapper
             return this;
         }
 
-        private List<SubpassDescription> subpassDescriptions;
-        public VkRenderPassBuilder AddSubpass(SubpassDescription subpass)
+        private List<VkSubpassDesc> subpassDescriptions;
+        public VkRenderPassBuilder AddSubpass(VkSubpassDesc subpass)
         {
             subpassDescriptions.Add(subpass);
+            return this;
+        }
+
+        private List<VkPipelineBuilder> subpasses;
+        public VkRenderPassBuilder AddPipeline(VkPipelineBuilder pipelineBuilder)
+        {
+            subpasses.Add(pipelineBuilder);
             return this;
         }
 
@@ -76,12 +156,33 @@ namespace MafrixEngine.GraphicsWrapper
             return this;
         }
 
-        public VkRenderPass Build()
+        public unsafe RenderPass Build()
         {
+            var attachDescs = attachmentDescriptions.ToArray();
+            var subpassDescList = new List<SubpassDescription>();
+            foreach (var desc in subpassDescriptions)
+            {
+                subpassDescList.Add(desc.Build(attachDescs));
+            }
+            var subpassDesc = subpassDescList.ToArray();
+            renderPassCreateInfo.AttachmentCount = (uint)attachDescs.Length;
+            fixed(AttachmentDescription* ptr = attachDescs)
+            {
+                renderPassCreateInfo.PAttachments = ptr;
+            }
+            renderPassCreateInfo.SubpassCount = (uint)subpassDesc.Length;
+            fixed (SubpassDescription* ptr = subpassDesc)
+            {
+                renderPassCreateInfo.PSubpasses = ptr;
+            }
+            renderPassCreateInfo.DependencyCount = 0;
+            renderPassCreateInfo.PDependencies = null;
 
-
-            var renderpass = new VkRenderPass();
-            return renderpass;
+            if (vk.CreateRenderPass(device, in renderPassCreateInfo, null, out var renderPass) != Result.Success)
+            {
+                throw new Exception("failed to create render pass.");
+            }
+            return renderPass;
         }
     }
 
@@ -117,32 +218,45 @@ namespace MafrixEngine.GraphicsWrapper
 /// </summary>
 /// 
 /// TODO: use raw memory to save all needed infomation.
-public class VkPipelineBuilder
+    public class VkPipelineBuilder
     {
-        private Vk vk;
-        private Device device;
-        private PipelineInfo pipelineInfo;
+        private VkContext vkCtx;
+        private Vk vk { get => vkCtx.vk; }
+        private Device device { get => vkCtx.device; }
 
-        public VkPipelineBuilder(Vk vk, Device device)
+        public VkPipelineBuilder(VkContext vkContext)
         {
-            this.vk = vk;
-            this.device = device;
+            vkCtx = vkContext;
+            shaders = new List<ShaderDefine>();
         }
 
         public void DumpPipelineLayout()
         {
             Console.WriteLine("Pipeline layout include these descriptor set: ...");
         }
+
+        private bool IsBindShaders { get; set; } = false;
+        public PipelineInfo pipelineInfo;
+        private List<ShaderDefine> shaders;
         public VkPipelineBuilder BindSharder(ShaderDefine shader)
         {
+            IsBindShaders = true;
+            shaders.Add(shader);
             return this;
         }
-        public VkPipelineBuilder BindSharders(Span<ShaderDefine> shaders)
+        public VkPipelineBuilder BindShaders(Span<ShaderDefine> shaderDefines)
         {
+            IsBindShaders = true;
+            foreach (var shader in shaderDefines)
+            {
+                shaders.Add(shader);
+            }
             return this;
         }
-        public unsafe VkPipelineBuilder BindVertexInput<T>(T t) where T : IVertexData
+        private bool IsBindVertexInput { get; set; } = false;
+        public unsafe VkPipelineBuilder BindVertexInput<T>(T t = default) where T : struct, IVertexData
         {
+            IsBindVertexInput = true;
             bindingDescription = t.BindingDescription;
             attributeDescription = t.AttributeDescriptions;
 
@@ -162,24 +276,7 @@ public class VkPipelineBuilder
         private VertexInputBindingDescription bindingDescription;
         private VertexInputAttributeDescription[] attributeDescription;
         private PipelineVertexInputStateCreateInfo vertexInputState;
-        public unsafe VkPipelineBuilder BindVertexInputState(VertexInputBindingDescription bindingDesc, VertexInputAttributeDescription[] attributeDesc)
-        {
-            bindingDescription = bindingDesc;
-            attributeDescription = attributeDesc;
-
-            vertexInputState.SType = StructureType.PipelineVertexInputStateCreateInfo;
-            vertexInputState.VertexBindingDescriptionCount = 1;
-            fixed(VertexInputBindingDescription* bindingDescPtr = &bindingDescription)
-            {
-                vertexInputState.PVertexBindingDescriptions = bindingDescPtr;
-            }
-            vertexInputState.VertexAttributeDescriptionCount = (uint)attributeDescription.Length;
-            fixed (VertexInputAttributeDescription* attributes = attributeDescription)
-            {
-                vertexInputState.PVertexAttributeDescriptions = attributes;
-            }
-            return this;
-        }
+        
         private PipelineInputAssemblyStateCreateInfo inputAssemblyState;
         public VkPipelineBuilder BindInputAssemblyState(PrimitiveTopology topology = PrimitiveTopology.TriangleList, bool primitiveRestartEnable = false)
         {
@@ -197,8 +294,10 @@ public class VkPipelineBuilder
         private Viewport viewport;
         private Rect2D scissor;
         private PipelineViewportStateCreateInfo viewportState;
+        private bool IsBindViewPort { get; set; } = false;
         public unsafe VkPipelineBuilder BindViewportState(Extent2D extent)
         {
+            IsBindViewPort = true;
             viewport = new Viewport();
             viewport.X = 0.0f;
             viewport.Y = 0.0f;
@@ -221,7 +320,8 @@ public class VkPipelineBuilder
             return this;
         }
         private PipelineRasterizationStateCreateInfo rasterizationState;
-        public VkPipelineBuilder BindRasterizationState(PolygonMode polygonMode = PolygonMode.Fill, CullModeFlags cullMode = CullModeFlags.BackBit, FrontFace frontFace = FrontFace.CounterClockwise)
+        public VkPipelineBuilder BindRasterizationState(PolygonMode polygonMode = PolygonMode.Fill, CullModeFlags cullMode = CullModeFlags.BackBit, FrontFace frontFace = FrontFace.CounterClockwise,
+            uint depthBiasEnable = Vk.False)
         {
             rasterizationState.SType = StructureType.PipelineRasterizationStateCreateInfo;
             rasterizationState.PolygonMode = polygonMode;
@@ -231,7 +331,7 @@ public class VkPipelineBuilder
             rasterizationState.DepthClampEnable = Vk.False;
             rasterizationState.RasterizerDiscardEnable = Vk.False;
             rasterizationState.LineWidth = 1.0f;
-            rasterizationState.DepthBiasEnable = Vk.False;
+            rasterizationState.DepthBiasEnable = depthBiasEnable;
             return this;
         }
         private PipelineMultisampleStateCreateInfo multisampling;
@@ -271,8 +371,10 @@ public class VkPipelineBuilder
         }
         private PipelineColorBlendAttachmentState[] colorBlendAttachments;
         private PipelineColorBlendStateCreateInfo colorBlendState;
+        private bool IsBindColorBlend { get; set; } = false;
         public unsafe VkPipelineBuilder BindColorBlendState(ColorBlendMask[] masks)
         {
+            IsBindColorBlend = true;
             colorBlendAttachments = new PipelineColorBlendAttachmentState[masks.Length];
             for (int i = 0; i < colorBlendAttachments.Length; i++)
             {
@@ -323,30 +425,9 @@ public class VkPipelineBuilder
 
         //    return this;
         //}
-        private DescriptorSetLayout[] setLayouts;
+        public DescriptorSetLayout[] setLayouts;
         public PipelineLayout pipelineLayout;
-        public unsafe VkPipelineBuilder BindPlipelineLayout(DescriptorSetLayout[] setLayouts_)
-        {
-            setLayouts = setLayouts_;
-            var pipelineLayoutInfo = new PipelineLayoutCreateInfo(StructureType.PipelineLayoutCreateInfo);
-            pipelineLayoutInfo.SetLayoutCount = (uint)setLayouts.Length;
-            fixed (DescriptorSetLayout* ptr = setLayouts)
-            {
-                pipelineLayoutInfo.PSetLayouts = ptr;
-            }
-            pipelineLayoutInfo.PushConstantRangeCount = 0;
-
-            if (vk.CreatePipelineLayout(device, in pipelineLayoutInfo, null, out pipelineLayout) != Result.Success)
-            {
-                throw new Exception("failed to create pipeline layout!");
-            }
-            return this;
-        }
-        public unsafe VkPipelineBuilder BindPlipelineLayout(PipelineLayout layout)
-        {
-            pipelineLayout = layout;
-            return this;
-        }
+        
         private PipelineShaderStageCreateInfo[] pipelineShaderStageCreateInfos;
         public VkPipelineBuilder BindShaderStages(PipelineShaderStageCreateInfo[] shaders)
         {
@@ -356,8 +437,29 @@ public class VkPipelineBuilder
         public Pipeline pipeline;
         public unsafe VkPipeline Build()
         {
+            Debug.Assert(IsBindShaders);
+
+            if (!IsBindVertexInput)
+            {
+                vertexInputState.SType = StructureType.PipelineVertexInputStateCreateInfo;
+            }
+            if(!IsBindColorBlend)
+            {
+                colorBlendState.SType = StructureType.PipelineColorBlendStateCreateInfo;
+                colorBlendState.AttachmentCount = 0;
+            }
+            if(!IsBindViewPort)
+            {
+                viewportState.SType = StructureType.PipelineViewportStateCreateInfo;
+            }
+
+            {
+                pipelineInfo = new PipelineInfo(vkCtx, shaders.ToArray());
+                pipelineShaderStageCreateInfos = pipelineInfo.pipelineShaderStageCreateInfos;
+            }
+
             var createInfo = new GraphicsPipelineCreateInfo(StructureType.GraphicsPipelineCreateInfo);
-            fixed(PipelineVertexInputStateCreateInfo* ptr = &vertexInputState)
+            fixed (PipelineVertexInputStateCreateInfo* ptr = &vertexInputState)
             {
                 createInfo.PVertexInputState = ptr;
             }
@@ -385,7 +487,7 @@ public class VkPipelineBuilder
             {
                 createInfo.PColorBlendState = ptr;
             }
-            createInfo.Layout = pipelineLayout;
+            createInfo.Layout = pipelineInfo.Layout;
             createInfo.RenderPass = renderPass;
             createInfo.Subpass = (uint)subpass;
             createInfo.BasePipelineHandle = default;

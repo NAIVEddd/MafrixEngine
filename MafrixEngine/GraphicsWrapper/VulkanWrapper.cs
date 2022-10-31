@@ -18,6 +18,7 @@ using SixLabors.ImageSharp.PixelFormats;
 using MafrixEngine.ModelLoaders;
 using MafrixEngine.Cameras;
 using MafrixEngine.Source.Interface;
+using MafrixEngine.Source.DataStruct;
 
 using Image = Silk.NET.Vulkan.Image;
 using Semaphore = Silk.NET.Vulkan.Semaphore;
@@ -26,6 +27,7 @@ using glTFLoader.Schema;
 using Silk.NET.Input;
 using MafrixEngine.Input;
 using Silk.NET.GLFW;
+using SharpGLTF.Transforms;
 
 namespace MafrixEngine.GraphicsWrapper
 {
@@ -45,10 +47,11 @@ namespace MafrixEngine.GraphicsWrapper
         public UInt32[] indices;
         public VkBuffer vertexBuffer;
         public VkBuffer indicesBuffer;
-        public DescriptorPool descriptorPool;
-        public DescriptorSet[] descriptorSets;
+        public VkDescriptorPool descriptorPool;
+        public GltfRHIAssertInfo meshAssertInfo;
         public Mat4 matrix;
         public float frameRotate;
+        public GltfAssertInfo assertInfo;
         public IDescriptor model;
 
         private Vk vk;
@@ -65,15 +68,16 @@ namespace MafrixEngine.GraphicsWrapper
             vertexBuffer = new VkBuffer(ctx);
             indicesBuffer = new VkBuffer(ctx);
             descriptorPool = default;
-            descriptorSets = default;
             matrix = default;
             frameRotate = default;
             model = default;
+            meshAssertInfo = default;
+            assertInfo = default;
         }
 
         public void BindCommand(Vk vk, CommandBuffer commandBuffer, Action<int> action)
         {
-            model.BindCommand(vk, commandBuffer, vertexBuffer.buffer, indicesBuffer.buffer, action);
+            model.BindCommand(vk, commandBuffer, assertInfo.vertexBuffer.buffer, assertInfo.indicesBuffer.buffer, action);
         }
 
         public unsafe void Dispose()
@@ -81,15 +85,7 @@ namespace MafrixEngine.GraphicsWrapper
             vertexBuffer.Dispose();
             indicesBuffer.Dispose();
 
-            foreach (var memory in uniformMemory)
-            {
-                vk.FreeMemory(device, memory, null);
-            }
-            foreach (var buffer in uniformBuffer)
-            {
-                vk.DestroyBuffer(device, buffer, null);
-            }
-            vk.DestroyDescriptorPool(device, descriptorPool, null);
+            assertInfo.Dispose();
 
             model.Dispose();
         }
@@ -108,13 +104,12 @@ namespace MafrixEngine.GraphicsWrapper
         public IWindow window;
         public KhrSurface khrSurface;
         public SurfaceKHR surface;
-        public KhrSwapchain khrSwapchain;
-        public SwapchainKHR swapchain;
+        public VkSwapchain vkSwapchain;
         public RenderPass renderPass;
         public DescriptorSetLayout descriptorSetLayout;
         public PipelineLayout pipelineLayout;
         public Pipeline graphicsPipeline;
-        public Framebuffer[] swapchainFramebuffers;
+        public VkFramebuffer vkFramebuffer;
 
         public Mesh[] meshes;
 
@@ -132,10 +127,6 @@ namespace MafrixEngine.GraphicsWrapper
         public Fence[] inFlightFences;
         public Fence[] imagesInFlight;
         public uint currentFrame;
-        public Image[] swapchainImages;
-        public Format swapchainImageFormat;
-        public Extent2D swapchainExtent;
-        public ImageView[] swapchainImageViews;
         private DescriptorPoolSize[] PoolSizes;
 
         private StagingBuffer staging;
@@ -200,7 +191,6 @@ namespace MafrixEngine.GraphicsWrapper
         {
             vkContext.Initialize("Render", new Version32(0, 0, 1));
             vk.TryGetInstanceExtension(instance, out khrSurface);
-            vk.TryGetInstanceExtension(instance, out khrSwapchain);
             vk.GetDeviceQueue(device, 0, 0, out graphicsQueue);
             CreateSurface();
             // extensions
@@ -209,17 +199,12 @@ namespace MafrixEngine.GraphicsWrapper
             staging = new StagingBuffer(vk, physicalDevice, device);
 
             CreateSwapChain();
-            CreateImageViews();
             CreateRenderPass();
             CreateGraphicsPipeline();
             CreateCommandPool();
             CreateDepthResources();
             CreateFramebuffers();
             LoadModel();
-            CreateTextureSampler();
-            CreateUniformBuffers();
-            CreateDescriptorPool();
-            CreateDescriptorSets();
             CreateCommandBuffers();
             CreateSyncObjects();
 
@@ -239,7 +224,7 @@ namespace MafrixEngine.GraphicsWrapper
             var pos = new Vec3(15.0f, 15.0f, 15.0f);
             var dir = new Vec3(0, 0, 0) - pos;
             camera = new Camera(new CameraCoordinate(pos, dir, new Vec3(0.0f, -1.0f, 0.0f)),
-                            new ProjectInfo(45.0f, (float)swapchainExtent.Width / (float)swapchainExtent.Height));
+                            new ProjectInfo(45.0f, (float)vkSwapchain.extent.Width / (float)vkSwapchain.extent.Height));
 
             startTime = DateTime.Now;
 
@@ -285,8 +270,7 @@ namespace MafrixEngine.GraphicsWrapper
             var fence = inFlightFences[currentFrame];
             vk.WaitForFences(device, 1, in fence, Vk.True, ulong.MaxValue);
 
-            uint imageIndex;
-            Result result = khrSwapchain.AcquireNextImage(device, swapchain, ulong.MaxValue, imageAvailableSemaphores[currentFrame], default, &imageIndex);
+            var result = vkSwapchain.AcquireNextImage(ulong.MaxValue, imageAvailableSemaphores[currentFrame], default, out var imageIndex);
             if(result == Result.ErrorOutOfDateKhr)
             {
                 // RecreateSwapChain()
@@ -305,7 +289,7 @@ namespace MafrixEngine.GraphicsWrapper
             imagesInFlight[imageIndex] = fence;
 
             animations?[0].Update(obj);
-            UpdateUniformBuffer(imageIndex);
+            UpdateUniformBuffer((uint)imageIndex);
 
             SubmitInfo submitInfo = new SubmitInfo { SType = StructureType.SubmitInfo };
 
@@ -337,7 +321,7 @@ namespace MafrixEngine.GraphicsWrapper
                 }
             }
 
-            fixed (SwapchainKHR* swapchainPtr = &swapchain)
+            fixed (SwapchainKHR* swapchainPtr = &vkSwapchain.swapchain)
             {
                 PresentInfoKHR presentInfo = new PresentInfoKHR
                 {
@@ -349,7 +333,7 @@ namespace MafrixEngine.GraphicsWrapper
                     PImageIndices = &imageIndex
                 };
 
-                result = khrSwapchain.QueuePresent(graphicsQueue, &presentInfo);
+                result = vkSwapchain.khrSwapchain.QueuePresent(graphicsQueue, &presentInfo);
             }
 
             if (result == Result.ErrorOutOfDateKhr || result == Result.SuboptimalKhr)// || framebufferResized)
@@ -362,7 +346,7 @@ namespace MafrixEngine.GraphicsWrapper
                 throw new Exception("failed to present swap chain image!");
             }
 
-            currentFrame = (currentFrame+1) % MaxFrameInFlight;
+            currentFrame = (currentFrame+1) % (uint)vkSwapchain.ImageCount;
         }
 
         private DateTime startTime;
@@ -378,21 +362,7 @@ namespace MafrixEngine.GraphicsWrapper
 
             foreach (var mesh in meshes)
             {
-                var descs = mesh.model.DescriptorSetCount;
-
-                var offset = index * descs * sizeof(UniformBufferObject);
-                mesh.model.UpdateUniformBuffer(out var modelMatrices);
-                void* data = null;
-                ulong datasize = (ulong)(Unsafe.SizeOf<UniformBufferObject>());
-                var model = Matrix4X4.CreateRotationY<float>(time * mesh.frameRotate);
-                for (var i = 0; i < modelMatrices.Length; i++)
-                {
-                    uboptr->model = modelMatrices[i] * mesh.matrix * model;
-                    var idx = index * descs + i;
-                    vk.MapMemory(device, mesh.uniformMemory[idx], 0, datasize, 0, ref data);
-                    Unsafe.CopyBlock(data, uboptr, (uint)datasize);
-                    vk.UnmapMemory(device, mesh.uniformMemory[idx]);
-                }
+                mesh.assertInfo.Update(camera, (int)currentFrame);
             }
         }
 
@@ -436,50 +406,6 @@ namespace MafrixEngine.GraphicsWrapper
             return Vk.False;
         }
 
-        public struct SwapChainSupportDetails
-        {
-            public SurfaceCapabilitiesKHR Capabilities { get; set; }
-            public SurfaceFormatKHR[] Formats { get; set; }
-            public PresentModeKHR[] PresentModes { get; set; }
-        }
-        private unsafe SwapChainSupportDetails QuerySwapChainSupport(PhysicalDevice device)
-        {
-            var details = new SwapChainSupportDetails();
-            khrSurface.GetPhysicalDeviceSurfaceCapabilities(device, surface, out var surfaceCapabilities);
-            details.Capabilities = surfaceCapabilities;
-            var formatCount = 0u;
-            khrSurface.GetPhysicalDeviceSurfaceFormats(device, surface, &formatCount, null);
-            if(formatCount != 0)
-            {
-                details.Formats = new SurfaceFormatKHR[formatCount];
-                using var mem = GlobalMemory.Allocate((int)formatCount * sizeof(SurfaceFormatKHR));
-                var formats = (SurfaceFormatKHR*)Unsafe.AsPointer(ref mem.GetPinnableReference());
-
-                khrSurface.GetPhysicalDeviceSurfaceFormats(device, surface, &formatCount, formats);
-                for(var i = 0; i < formatCount; i++)
-                {
-                    details.Formats[i] = formats[i];
-                }
-            }
-
-            var presentModeCount = 0u;
-            khrSurface.GetPhysicalDeviceSurfacePresentModes(device, surface, &presentModeCount, null);
-            if(presentModeCount != 0)
-            {
-                details.PresentModes = new PresentModeKHR[presentModeCount];
-                using var mem = GlobalMemory.Allocate((int) presentModeCount * sizeof(PresentModeKHR));
-                var modes = (PresentModeKHR*)Unsafe.AsPointer(ref mem.GetPinnableReference());
-
-                khrSurface.GetPhysicalDeviceSurfacePresentModes(device, surface, &presentModeCount, modes);
-                for(var i = 0; i < presentModeCount; i++)
-                {
-                    details.PresentModes[i] = modes[i];
-                }
-            }
-
-            return details;
-        }
-        
         public struct QueueFamilyIndices
         {
             public uint? GraphicsFamily { get; set; }
@@ -524,202 +450,46 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe bool CreateSwapChain()
         {
-            var swapChainSupport = QuerySwapChainSupport(physicalDevice);
-            var surfaceFormat = ChooseSwapSurfaceFormat(swapChainSupport.Formats);
-            var presentMode = ChooseSwapPresentMode(swapChainSupport.PresentModes);
-            var extent = ChooseSwapExtent(swapChainSupport.Capabilities);
-
-            if (extent.Width == 0 || extent.Height == 0)
-                return false;
-
-            var imageCount = swapChainSupport.Capabilities.MinImageCount + 1;
-            if(swapChainSupport.Capabilities.MaxImageCount > 0 &&
-                imageCount > swapChainSupport.Capabilities.MaxImageCount)
-            {
-                imageCount = swapChainSupport.Capabilities.MaxImageCount;
-            }
-
-            var createInfo = new SwapchainCreateInfoKHR(StructureType.SwapchainCreateInfoKhr);
-            createInfo.Surface = surface;
-            createInfo.MinImageCount = imageCount;
-            createInfo.ImageFormat = surfaceFormat.Format;
-            createInfo.ImageColorSpace = surfaceFormat.ColorSpace;
-            createInfo.ImageExtent = extent;
-            createInfo.ImageArrayLayers = 1;
-            createInfo.ImageUsage = ImageUsageFlags.ColorAttachmentBit;
-
-            var indices = FindQueueFamilies(physicalDevice);
-            uint[] queueFamilyIndices = { indices.GraphicsFamily!.Value, indices.PresentFamily!.Value };
-            fixed(uint* queueFamily = queueFamilyIndices)
-            {
-                if (indices.GraphicsFamily.Value != indices.PresentFamily.Value)
-                {
-                    createInfo.ImageSharingMode = SharingMode.Concurrent;
-                    createInfo.QueueFamilyIndexCount = 2;
-                    createInfo.PQueueFamilyIndices = queueFamily;
-                }
-                else
-                {
-                    createInfo.ImageSharingMode = SharingMode.Exclusive;
-                }
-                createInfo.PreTransform = swapChainSupport.Capabilities.CurrentTransform;
-                createInfo.CompositeAlpha = CompositeAlphaFlagsKHR.OpaqueBitKhr;
-                createInfo.PresentMode = presentMode;
-                createInfo.Clipped = Vk.True;
-                createInfo.OldSwapchain = default;
-                if(!vk.TryGetDeviceExtension(instance, device, out khrSwapchain))
-                {
-                    throw new NotSupportedException("KHR_swapchain extension not found.");
-                }
-                if(khrSwapchain.CreateSwapchain(device, createInfo, null, out swapchain) != Result.Success)
-                {
-                    throw new Exception("failed to create swapchain.");
-                }
-            }
-
-            khrSwapchain.GetSwapchainImages(device, swapchain, &imageCount, null);
-            swapchainImages = new Image[imageCount];
-            khrSwapchain.GetSwapchainImages(device, swapchain, &imageCount, swapchainImages);
-
-            swapchainImageFormat = surfaceFormat.Format;
-            swapchainExtent = extent;
+            vkSwapchain = new VkSwapchain(vkContext, khrSurface, surface, window);
+            vkSwapchain.Create();
 
             return true;
-        }
-        private Extent2D ChooseSwapExtent(SurfaceCapabilitiesKHR capabilities)
-        {
-            if(capabilities.CurrentExtent.Width != uint.MaxValue)
-            {
-                return capabilities.CurrentExtent;
-            }
-
-            var actualExtent = new Extent2D
-            {
-                Height = (uint)window.FramebufferSize.Y,
-                Width = (uint)window.FramebufferSize.X
-            };
-            actualExtent.Width = new[]
-            {
-                capabilities.MinImageExtent.Width,
-                new[] {capabilities.MaxImageExtent.Width, actualExtent.Width }.Min()
-            }.Max();
-            actualExtent.Height = new[]
-            {
-                capabilities.MinImageExtent.Height,
-                new[] {capabilities.MaxImageExtent.Height, actualExtent.Height}.Min()
-            }.Max();
-            return actualExtent;
-        }
-        private PresentModeKHR ChooseSwapPresentMode(PresentModeKHR[] presentModes)
-        {
-            foreach(var mode in presentModes)
-            {
-                if(mode == PresentModeKHR.MailboxKhr)
-                {
-                    return mode;
-                }
-            }
-            return PresentModeKHR.FifoKhr;
-        }
-        private SurfaceFormatKHR ChooseSwapSurfaceFormat(SurfaceFormatKHR[] formats)
-        {
-            foreach(var format in formats)
-            {
-                if(format.Format == Format.B8G8R8A8Unorm)
-                {
-                    return format;
-                }
-            }
-            return formats[0];
-        }
-
-        private unsafe void CreateImageViews()
-        {
-            swapchainImageViews = new ImageView[swapchainImages.Length];
-
-            for(var i = 0; i < swapchainImages.Length; i++)
-            {
-                CreateImageView(swapchainImages[i], 1, swapchainImageFormat, ImageAspectFlags.ColorBit, out var imageView);
-                
-                swapchainImageViews[i] = imageView;
-            }
         }
 
         private unsafe void CreateRenderPass()
         {
-            var colorAttachment = new AttachmentDescription();
-            colorAttachment.Format = swapchainImageFormat;
-            colorAttachment.Samples = SampleCountFlags.Count1Bit;
-            colorAttachment.LoadOp = AttachmentLoadOp.Clear;
-            colorAttachment.StoreOp = AttachmentStoreOp.Store;
-            colorAttachment.StencilLoadOp = AttachmentLoadOp.DontCare;
-            colorAttachment.StencilStoreOp = AttachmentStoreOp.DontCare;
-            colorAttachment.InitialLayout = ImageLayout.Undefined;
-            colorAttachment.FinalLayout = ImageLayout.PresentSrcKhr;
-            var depthAttachment = new AttachmentDescription();
-            FindDepthFormat(out depthAttachment.Format);
-            depthAttachment.Samples = SampleCountFlags.Count1Bit;
-            depthAttachment.LoadOp = AttachmentLoadOp.Clear;
-            depthAttachment.StoreOp = AttachmentStoreOp.DontCare;
-            depthAttachment.StencilLoadOp = AttachmentLoadOp.DontCare;
-            depthAttachment.StencilStoreOp = AttachmentStoreOp.DontCare;
-            depthAttachment.InitialLayout = ImageLayout.Undefined;
-            depthAttachment.FinalLayout = ImageLayout.DepthStencilAttachmentOptimal;
+            FindDepthFormat(out var depthFormat);
 
-            var colorAttachmentRef = new AttachmentReference(0, ImageLayout.ColorAttachmentOptimal);
-            var depthAttachmentRef = new AttachmentReference(1, ImageLayout.DepthStencilAttachmentOptimal);
-            var subpass = new SubpassDescription();
-            subpass.PipelineBindPoint = PipelineBindPoint.Graphics;
-            subpass.ColorAttachmentCount = 1;
-            subpass.PColorAttachments = &colorAttachmentRef;
-            subpass.PDepthStencilAttachment = &depthAttachmentRef;
-
-            var dependency = new SubpassDependency();
-            dependency.SrcSubpass = Vk.SubpassExternal;
-            dependency.DstSubpass = 0;
-            dependency.SrcStageMask =
-                PipelineStageFlags.ColorAttachmentOutputBit |
-                PipelineStageFlags.EarlyFragmentTestsBit;
-            dependency.DstStageMask =
-                PipelineStageFlags.ColorAttachmentOutputBit |
-                PipelineStageFlags.EarlyFragmentTestsBit;
-            dependency.SrcAccessMask = 0;
-            dependency.DstAccessMask =
-                AccessFlags.ColorAttachmentWriteBit |
-                AccessFlags.DepthStencilAttachmentWriteBit;
-
-            var attachments = stackalloc AttachmentDescription[2];
-            attachments[0] = colorAttachment;
-            attachments[1] = depthAttachment;
-            var renderPassInfo = new RenderPassCreateInfo(StructureType.RenderPassCreateInfo);
-            renderPassInfo.AttachmentCount = 2;
-            renderPassInfo.PAttachments = attachments;
-            renderPassInfo.SubpassCount = 1;
-            renderPassInfo.PSubpasses = &subpass;
-            renderPassInfo.DependencyCount = 1;
-            renderPassInfo.PDependencies = &dependency;
-
-            if(vk.CreateRenderPass(device, in renderPassInfo, null, out renderPass) != Result.Success)
+            var tRenderPass = new VkRenderPassBuilder(vk, device);
             {
-                throw new Exception("failed to create render pass.");
+                tRenderPass.AddAttachment(new AttachmentDescription(null, vkSwapchain.format,
+                    SampleCountFlags.Count1Bit, AttachmentLoadOp.Clear, AttachmentStoreOp.Store,
+                    null, null, ImageLayout.Undefined, ImageLayout.PresentSrcKhr));
+                tRenderPass.AddAttachment(new AttachmentDescription(null, depthFormat,
+                    SampleCountFlags.Count1Bit, AttachmentLoadOp.Clear, AttachmentStoreOp.DontCare,
+                    null, null, ImageLayout.Undefined, ImageLayout.DepthStencilAttachmentOptimal));
             }
+            {
+                var subpassDep = new VkSubpassDesc();
+                subpassDep.AddColorAttachment(0);
+                subpassDep.DepthStencilAttachmentRef = 1;
+                tRenderPass.AddSubpass(subpassDep);
+            }
+            renderPass = tRenderPass.Build();
         }
 
         private unsafe void CreateGraphicsPipeline()
         {
             // parse DescriptorSetLayout from shader.spirv
             var shaderDefines = new ShaderDefine[2];
-            //shaderDefines[0] = new ShaderDefine("MafrixEngine.Shaders.triangle.vert.spv", ShaderStageFlags.VertexBit, true);
-            shaderDefines[0] = new ShaderDefine("./Shaders/gltfSkining.vert.spv", ShaderStageFlags.VertexBit);
-            shaderDefines[1] = new ShaderDefine("MafrixEngine.Shaders.triangle.frag.spv", ShaderStageFlags.FragmentBit, true);
+            shaderDefines[0] = new ShaderDefine("./Shaders/triangle.vert.spv", ShaderStageFlags.VertexBit);
+            shaderDefines[1] = new ShaderDefine("./Shaders/triangle.frag.spv", ShaderStageFlags.FragmentBit);
             // using some class to simplfy pipeline create
-            var pipelineInfos = new PipelineInfo(vkContext, shaderDefines);
-            descriptorSetLayout = pipelineInfos.setLayoutInfo.SetLayout;
-            PoolSizes = pipelineInfos.setLayoutInfo.PoolSizes;
 
-            VkPipelineBuilder pipelineBuilder = new VkPipelineBuilder(vk, device);
+            VkPipelineBuilder pipelineBuilder = new VkPipelineBuilder(vkContext);
+            pipelineBuilder.BindShaders(shaderDefines);
             pipelineBuilder.BindInputAssemblyState(PrimitiveTopology.TriangleList);
-            pipelineBuilder.BindViewportState(swapchainExtent);
+            pipelineBuilder.BindViewportState(vkSwapchain.extent);
             pipelineBuilder.BindRasterizationState(PolygonMode.Fill, CullModeFlags.None);
             pipelineBuilder.BindMultisampleState();
             pipelineBuilder.BindDepthStencilState(true, true, CompareOp.Less);
@@ -730,42 +500,14 @@ namespace MafrixEngine.GraphicsWrapper
                 ColorComponentFlags.BBit |
                 ColorComponentFlags.ABit, false);
             pipelineBuilder.BindColorBlendState(masks);
-            //pipelineBuilder.BindVertexInput<Vertex>(default);
-            pipelineBuilder.BindVertexInput<AnimatedVertex>(default);
+            pipelineBuilder.BindVertexInput<Vertex>(default);
+            //pipelineBuilder.BindVertexInput<AnimatedVertex>(default);
             pipelineBuilder.BindRenderPass(renderPass, 0);
-            pipelineBuilder.BindPlipelineLayout(pipelineInfos.Layout);
-            pipelineBuilder.BindShaderStages(pipelineInfos.pipelineShaderStageCreateInfos);
             pipelineBuilder.Build();
-            pipelineLayout = pipelineBuilder.pipelineLayout;
+            descriptorSetLayout = pipelineBuilder.pipelineInfo.setLayoutInfo.SetLayout;
+            PoolSizes = pipelineBuilder.pipelineInfo.setLayoutInfo.PoolSizes;
+            pipelineLayout = pipelineBuilder.pipelineInfo.Layout;
             graphicsPipeline = pipelineBuilder.pipeline;
-        }
-
-        private unsafe void CreateBuffer(ulong size, BufferUsageFlags usage,
-            MemoryPropertyFlags property, out Buffer buffer, out DeviceMemory bufferMemory)
-        {
-            var bufferInfo = new BufferCreateInfo(StructureType.BufferCreateInfo);
-            bufferInfo.Size = size;
-            bufferInfo.Usage = usage;
-            bufferInfo.SharingMode = SharingMode.Exclusive;
-            if (vk.CreateBuffer(device, bufferInfo, null, out buffer) != Result.Success)
-            {
-                throw new Exception("failed to create vertex buffer!");
-            }
-
-            // allocate memory
-            var memRequirements = new MemoryRequirements();
-            vk.GetBufferMemoryRequirements(device, buffer, out memRequirements);
-
-            var allocInfo = new MemoryAllocateInfo(StructureType.MemoryAllocateInfo);
-            allocInfo.AllocationSize = memRequirements.Size;
-            allocInfo.MemoryTypeIndex =
-                FindMemoryType(memRequirements.MemoryTypeBits, property);
-            if (vk.AllocateMemory(device, allocInfo, null, out bufferMemory) != Result.Success)
-            {
-                throw new Exception("failed to allocate vertex buffer memory!");
-            }
-
-            vk.BindBufferMemory(device, buffer, bufferMemory, 0);
         }
 
         private unsafe void FindSupportedFormat(Format[] candidates,
@@ -807,7 +549,8 @@ namespace MafrixEngine.GraphicsWrapper
         private unsafe void CreateDepthResources()
         {
             FindDepthFormat(out Format depthFormat);
-            CreateImage(swapchainExtent.Width, swapchainExtent.Height, 1,
+            var extent = vkSwapchain.extent;
+            CreateImage(extent.Width, extent.Height, 1,
                 depthFormat, ImageTiling.Optimal,
                 ImageUsageFlags.DepthStencilAttachmentBit,
                 MemoryPropertyFlags.DeviceLocalBit,
@@ -815,157 +558,6 @@ namespace MafrixEngine.GraphicsWrapper
             CreateImageView(depthImage, 1, depthFormat, ImageAspectFlags.DepthBit, out depthImageView);
             TransitionImageLayout(depthImage, 1, depthFormat,
                 ImageLayout.Undefined, ImageLayout.DepthStencilAttachmentOptimal);
-        }
-
-        private unsafe void CreateTextureImage(string name, out Image image, out DeviceMemory deviceMemory)
-        {
-            using var texture = SlImage.Load<Rgba32>(name);
-            var memoryGroup = texture.GetPixelMemoryGroup();
-            var imageSize = memoryGroup.TotalLength * sizeof(Rgba32);
-            Memory<byte> array = new byte[imageSize];
-
-            var block = MemoryMarshal.Cast<byte, Rgba32>(array.Span);
-            foreach (var memory in memoryGroup)
-            {
-                memory.Span.CopyTo(block);
-                block = block.Slice(memory.Length);
-            }
-            var width = texture.Width;
-            var height = texture.Height;
-            mipLevels = (UInt32)Math.Floor(Math.Log2(Math.Max(width, height))) + 1;
-
-            CreateImage((uint)width, (uint)height, mipLevels,
-                Format.R8G8B8A8Srgb,
-                ImageTiling.Optimal,
-                ImageUsageFlags.TransferSrcBit |
-                ImageUsageFlags.TransferDstBit |
-                ImageUsageFlags.SampledBit,
-                MemoryPropertyFlags.DeviceLocalBit,
-                out image, out deviceMemory);
-            TransitionImageLayout(image, mipLevels, Format.R8G8B8A8Srgb,
-                ImageLayout.Undefined, ImageLayout.TransferDstOptimal);
-
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-            staging.CopyDataToImage(stCommand, image, (uint)width, (uint)height, array.Span, (uint)imageSize);
-
-            GenerateMipmaps(image, Format.R8G8B8A8Srgb, (uint)width, (uint)height, mipLevels);
-        }
-
-        private unsafe void GenerateMipmaps(Image image, Format imageFormat, uint width, uint height, uint mipLevels)
-        {
-            vk.GetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, out var formatProperties);
-            if(0 == (formatProperties.OptimalTilingFeatures & FormatFeatureFlags.SampledImageFilterLinearBit))
-            {
-                throw new Exception("texture image format does not support linear blitting.");
-            }
-            var stCommand = new SingleTimeCommand(vk, device, commandPool, graphicsQueue);
-            stCommand.BeginSingleTimeCommands(out var commandBuffer);
-
-            var barrier = new ImageMemoryBarrier(StructureType.ImageMemoryBarrier);
-            barrier.Image = image;
-            barrier.SrcQueueFamilyIndex = Vk.QueueFamilyIgnored;
-            barrier.DstQueueFamilyIndex = Vk.QueueFamilyIgnored;
-            barrier.SubresourceRange.AspectMask = ImageAspectFlags.ColorBit;
-            barrier.SubresourceRange.BaseArrayLayer = 0;
-            barrier.SubresourceRange.LayerCount = 1;
-            barrier.SubresourceRange.LevelCount = 1;
-
-            var mipWidth = width;
-            var mipHeight = height;
-            for(var i = 1; i < mipLevels; i++)
-            { 
-                barrier.SubresourceRange.BaseMipLevel = (uint)i - 1;
-                barrier.OldLayout = ImageLayout.TransferDstOptimal;
-                barrier.NewLayout = ImageLayout.TransferSrcOptimal;
-                barrier.SrcAccessMask = AccessFlags.TransferWriteBit;
-                barrier.DstAccessMask = AccessFlags.TransferReadBit;
-
-                vk.CmdPipelineBarrier(commandBuffer,
-                    PipelineStageFlags.TransferBit,
-                    PipelineStageFlags.TransferBit, 0,
-                    0, null,
-                    0, null, 1, barrier);
-
-                var blit = new ImageBlit();
-                blit.SrcOffsets[0].X = 0;
-                blit.SrcOffsets[0].Z = 0;
-                blit.SrcOffsets[0].Y = 0;
-                blit.SrcOffsets[1].X = (int)mipWidth;
-                blit.SrcOffsets[1].Y = (int)mipHeight;
-                blit.SrcOffsets[1].Z = 1;
-                blit.SrcSubresource.AspectMask = ImageAspectFlags.ColorBit;
-                blit.SrcSubresource.MipLevel = (uint)i - 1;
-                blit.SrcSubresource.BaseArrayLayer = 0;
-                blit.SrcSubresource.LayerCount = 1;
-                blit.DstOffsets[0].X = 0;
-                blit.DstOffsets[0].Y = 0;
-                blit.DstOffsets[0].Z = 0;
-                blit.DstOffsets[1].X = (int) (mipWidth > 1 ? mipWidth / 2 : 1);
-                blit.DstOffsets[1].Y = (int)(mipHeight > 1 ? mipHeight / 2 : 1);
-                blit.DstOffsets[1].Z = 1;
-                blit.DstSubresource.AspectMask = ImageAspectFlags.ColorBit;
-                blit.DstSubresource.MipLevel = (uint)i;
-                blit.DstSubresource.BaseArrayLayer = 0;
-                blit.DstSubresource.LayerCount = 1;
-
-                vk.CmdBlitImage(commandBuffer,
-                    image, ImageLayout.TransferSrcOptimal,
-                    image, ImageLayout.TransferDstOptimal,
-                    1, blit, Filter.Linear);
-
-                barrier.OldLayout = ImageLayout.TransferSrcOptimal;
-                barrier.NewLayout = ImageLayout.ShaderReadOnlyOptimal;
-                barrier.SrcAccessMask = AccessFlags.TransferReadBit;
-                barrier.DstAccessMask = AccessFlags.ShaderReadBit;
-                vk.CmdPipelineBarrier(commandBuffer,
-                    PipelineStageFlags.TransferBit,
-                    PipelineStageFlags.FragmentShaderBit, 0,
-                    0, null,
-                    0, null, 1, barrier);
-
-                if (mipWidth > 1) mipWidth /= 2;
-                if (mipHeight > 1) mipHeight /= 2;
-            }
-
-            barrier.SubresourceRange.BaseMipLevel = mipLevels - 1;
-            barrier.OldLayout = ImageLayout.TransferDstOptimal;
-            barrier.NewLayout = ImageLayout.ShaderReadOnlyOptimal;
-            barrier.SrcAccessMask = AccessFlags.TransferWriteBit;
-            barrier.DstAccessMask = AccessFlags.ShaderReadBit;
-
-            vk.CmdPipelineBarrier(commandBuffer,
-                PipelineStageFlags.TransferBit,
-                PipelineStageFlags.FragmentShaderBit, 0,
-                0, null,
-                0, null, 1, barrier);
-
-            stCommand.EndSingleTimeCommands(commandBuffer);
-        }
-
-        private unsafe void CreateTextureSampler()
-        {
-            vk.GetPhysicalDeviceProperties(physicalDevice, out var properties);
-            var samplerInfo = new SamplerCreateInfo(StructureType.SamplerCreateInfo);
-            samplerInfo.MagFilter = Filter.Linear;
-            samplerInfo.MinFilter = Filter.Linear;
-            samplerInfo.AddressModeU = SamplerAddressMode.Repeat;
-            samplerInfo.AddressModeV = SamplerAddressMode.Repeat;
-            samplerInfo.AddressModeW = SamplerAddressMode.Repeat;
-            samplerInfo.AnisotropyEnable = Vk.True;
-            samplerInfo.MaxAnisotropy = properties.Limits.MaxSamplerAnisotropy;
-            samplerInfo.BorderColor = BorderColor.IntOpaqueBlack;
-            samplerInfo.UnnormalizedCoordinates = Vk.False;
-            samplerInfo.CompareEnable = Vk.False;
-            samplerInfo.CompareOp = CompareOp.Always;
-            samplerInfo.MipmapMode = SamplerMipmapMode.Linear;
-            samplerInfo.MipLodBias = 0.0f;
-            samplerInfo.MinLod = 0.0f;
-            samplerInfo.MaxLod = 0.0f;
-            if(vk.CreateSampler(device, samplerInfo, null, out textureSampler) != Result.Success)
-            {
-                throw new Exception("failed to create texture sampler.");
-            }
-
         }
 
         private unsafe void CreateImageView(Image image, uint mipLevels, Format format, ImageAspectFlags aspectFlags, out ImageView imageView)
@@ -1093,8 +685,8 @@ namespace MafrixEngine.GraphicsWrapper
             var modelPathNames = new ValueTuple<string, string, int>[]
             {
                 //("Asserts/CesiumMan/glTF", "CesiumMan.gltf", 0),
-                ("Asserts/facial_body", "scene.gltf", 1),
-                //("Asserts/sponza", "Sponza.gltf", -1),
+                //("Asserts/facial_body", "scene.gltf", 1),
+                ("Asserts/sponza", "Sponza.gltf", -1),
                 //("Asserts/gaz-66", "scene.gltf", -1)
             };
 
@@ -1113,19 +705,24 @@ namespace MafrixEngine.GraphicsWrapper
                     animations = loader.ParseAnimation(vkContext, stCommand, staging);
                     meshes[i].model = animations[0];
                     animations[0].UpdateBuffer = UpdateBufferData;
-                    CreateBuffers(BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
-                            animations[0].jointsInverseMatrix, out animations[0].buffers);
-                    CreateVertexBuffer(i, animations[0].vertexBuffer);
-                    CreateIndexBuffer(i, animations[0].indexBuffer);
+                    //CreateBuffers(BufferUsageFlags.StorageBufferBit | BufferUsageFlags.TransferDstBit,
+                    //        animations[0].jointsInverseMatrix, out animations[0].buffers);
+                    //CreateVertexBuffer(i, animations[0].vertexBuffer);
+                    //CreateIndexBuffer(i, animations[0].indexBuffer);
                 }
                 else
                 {
                     var gltf2 = loader.Parse(vkContext, stCommand, staging);
-                    meshes[i].vertices = gltf2.vertices;
-                    meshes[i].indices = gltf2.indices;
+                    //meshes[i].vertices = gltf2.vertices;
+                    //meshes[i].indices = gltf2.indices;
                     meshes[i].model = gltf2;
-                    CreateVertexBuffer(i, meshes[i].vertices);
-                    CreateIndexBuffer(i, meshes[i].indices);
+                    //CreateVertexBuffer(i, meshes[i].vertices);
+                    //CreateIndexBuffer(i, meshes[i].indices);
+
+                    var rhiAssert = new GltfAssertInfo(vkContext, stCommand, staging);
+                    rhiAssert.Initialize(gltf2, new DescriptorSetLayout[] { descriptorSetLayout }, PoolSizes, vkSwapchain.ImageCount);
+                    meshes[i].assertInfo = rhiAssert;
+                    meshes[i].descriptorPool = meshes[i].assertInfo.pool;
                 }
 
                 /// voxel load model
@@ -1144,85 +741,9 @@ namespace MafrixEngine.GraphicsWrapper
             //meshes[1].frameRotate = Scalar.DegreesToRadians<float>(77.0f);
         }
 
-        private unsafe void CreateVertexBuffer<T>(int m, T[] vertices) where T : unmanaged, IVertexData
-        {
-            ulong bufferSize = (ulong)GetArrayByteSize(vertices);
-            meshes[m].vertexBuffer.Init(bufferSize,
-                BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.VertexBufferBit);
-            meshes[m].vertexBuffer.UpdateData(vertices, commandPool, graphicsQueue, staging);
-        }
-
-        public unsafe void CreateBuffers<T>(BufferUsageFlags flag, T[] data, out VkBuffer[] buffers) where T : unmanaged
-        {
-            buffers = new VkBuffer[MaxFrameInFlight];
-            var bufferSize = (ulong)(sizeof(T) * data.Length);
-            for (int i = 0; i < MaxFrameInFlight; i++)
-            {
-                buffers[i] = new VkBuffer(vkContext, bufferSize, flag);
-            }
-        }
-
         public void UpdateBufferData(Matrix4X4<float>[] data, VkBuffer buffer)
         {
             buffer.UpdateData(data, commandPool, graphicsQueue, staging);
-        }
-
-        private unsafe void CreateIndexBuffer(int m, uint[] indices)
-        {
-            ulong bufferSize = (ulong)GetArrayByteSize(indices);
-            meshes[m].indicesBuffer.Init(bufferSize,
-                BufferUsageFlags.TransferDstBit |
-                BufferUsageFlags.IndexBufferBit);
-            meshes[m].indicesBuffer.UpdateData(indices, commandPool, graphicsQueue, staging);
-        }
-
-        private unsafe void CreateUniformBuffers()
-        {
-            
-            for(var m = 0; m < meshes.Length; m++)
-            {
-                var setCount = MaxFrameInFlight * meshes[m].model.DescriptorSetCount;
-                ulong bufferSize = (ulong) (Unsafe.SizeOf<UniformBufferObject>() * meshes[m].model.DescriptorSetCount);
-                meshes[m].uniformBuffer = new Buffer[setCount];
-                meshes[m].uniformMemory = new DeviceMemory[setCount];
-                for (int i = 0; i < setCount; i++)
-                {
-                    CreateBuffer(bufferSize, BufferUsageFlags.UniformBufferBit,
-                        MemoryPropertyFlags.HostVisibleBit |
-                        MemoryPropertyFlags.HostCoherentBit,
-                        out meshes[m].uniformBuffer[i], out meshes[m].uniformMemory[i]);
-                }
-            }
-        }
-
-        private unsafe void CreateDescriptorPool()
-        {
-            for(var m = 0; m < meshes.Length; m++)
-            {
-                meshes[m].descriptorPool =
-                    meshes[m].model.CreateDescriptorPool(
-                        vkContext,
-                        new DescriptorSetLayout[] { descriptorSetLayout },
-                        PoolSizes, MaxFrameInFlight);
-            }
-        }
-
-        private unsafe void CreateDescriptorSets()
-        {
-            for(var m = 0; m < meshes.Length; m++)
-            {
-                var setLayouts = new DescriptorSetLayout[] {descriptorSetLayout};
-                meshes[m].descriptorSets = meshes[m].model.AllocateDescriptorSets(vkContext, meshes[m].descriptorPool, setLayouts, MaxFrameInFlight);
-
-                for (var i = 0; i < MaxFrameInFlight; i++)
-                {
-                    meshes[m].model.UpdateDescriptorSets(
-                        vkContext,
-                        textureSampler,
-                        meshes[m].descriptorSets, meshes[m].uniformBuffer, i * meshes[m].model.DescriptorSetCount);
-                }
-            }
         }
 
         private unsafe UInt32 FindMemoryType(UInt32 typeFilter, MemoryPropertyFlags properties)
@@ -1243,28 +764,15 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateFramebuffers()
         {
-            swapchainFramebuffers = new Framebuffer[swapchainImageViews.Length];
-
-            var attachments = stackalloc ImageView[2];
-            attachments[1] = depthImageView;
-            for(var i = 0; i < swapchainImageViews.Length; i++)
+            vkFramebuffer = new VkFramebuffer(vkContext, vkSwapchain.ImageCount);
+            vkFramebuffer.SetRenderpass(renderPass);
+            vkFramebuffer.SetExtent(vkSwapchain.extent);
+            for (int i = 0; i < vkSwapchain.ImageCount; i++)
             {
-                attachments[0] = swapchainImageViews[i];
-                var framebufferInfo = new FramebufferCreateInfo(StructureType.FramebufferCreateInfo);
-                framebufferInfo.RenderPass = renderPass;
-                framebufferInfo.AttachmentCount = 2;
-                framebufferInfo.PAttachments = attachments;
-                framebufferInfo.Width = swapchainExtent.Width;
-                framebufferInfo.Height = swapchainExtent.Height;
-                framebufferInfo.Layers = 1;
-
-                var framebuffer = new Framebuffer();
-                if(vk.CreateFramebuffer(device, framebufferInfo, null, out framebuffer) != Result.Success)
-                {
-                    throw new Exception("failed to create framebuffer!");
-                }
-                swapchainFramebuffers[i] = framebuffer;
+                vkFramebuffer.AddAttachment(i, 0, vkSwapchain.imageViews[i]);
+                vkFramebuffer.AddAttachment(i, 1, depthImageView);
             }
+            vkFramebuffer.Build();
         }
 
         private unsafe void CreateCommandPool()
@@ -1285,7 +793,7 @@ namespace MafrixEngine.GraphicsWrapper
 
         private unsafe void CreateCommandBuffers()
         {
-            commandBuffers = new CommandBuffer[swapchainFramebuffers.Length];
+            commandBuffers = new CommandBuffer[vkFramebuffer.framebuffers.Length];
 
             var allocInfo = new CommandBufferAllocateInfo
             {
@@ -1316,8 +824,8 @@ namespace MafrixEngine.GraphicsWrapper
                 {
                     SType = StructureType.RenderPassBeginInfo,
                     RenderPass = renderPass,
-                    Framebuffer = swapchainFramebuffers[i],
-                    RenderArea = { Offset = new Offset2D { X = 0, Y = 0 }, Extent = swapchainExtent }
+                    Framebuffer = vkFramebuffer.framebuffers[i],
+                    RenderArea = { Offset = new Offset2D { X = 0, Y = 0 }, Extent = vkSwapchain.extent }
                 };
 
                 renderPassInfo.ClearValueCount = 2;
@@ -1333,8 +841,7 @@ namespace MafrixEngine.GraphicsWrapper
 
                     void BindDescriptorSets(int nodeIndex)
                     {
-                        var idx = i * meshes[m].model.DescriptorSetCount + nodeIndex;
-                        vk.CmdBindDescriptorSets(commandBuffers[i], PipelineBindPoint.Graphics, pipelineLayout, 0, 1, meshes[m].descriptorSets[idx], 0, null);
+                        meshes[m].descriptorPool.BindCommand(commandBuffers[i], pipelineLayout, i, nodeIndex);
                     }
                 }
 
@@ -1384,10 +891,6 @@ namespace MafrixEngine.GraphicsWrapper
                 vk.DestroyFence(device, inFlightFences[i], null);
             }
             vk.DestroyCommandPool(device, commandPool, null);
-            foreach(var framebuffer in swapchainFramebuffers)
-            {
-                vk.DestroyFramebuffer(device, framebuffer, null);
-            }
             vk.DestroySampler(device, textureSampler, null);
             vk.DestroyImageView(device, depthImageView, null);
             vk.DestroyImage(device, depthImage, null);
@@ -1402,11 +905,7 @@ namespace MafrixEngine.GraphicsWrapper
             vk.DestroyPipeline(device, graphicsPipeline, null);
             vk.DestroyPipelineLayout(device, pipelineLayout, null);
             vk.DestroyRenderPass(device, renderPass, null);
-            foreach(var imageView in swapchainImageViews)
-            {
-                vk.DestroyImageView(device, imageView, null);
-            }
-            khrSwapchain.DestroySwapchain(device, swapchain, null);
+            vkFramebuffer.Dispose();
 
             staging.Dispose();
 
@@ -1414,6 +913,7 @@ namespace MafrixEngine.GraphicsWrapper
             {
                 debugUtils.DestroyDebugUtilsMessenger(instance, debugMessager, null);
             }
+            vkSwapchain.Dispose();
             khrSurface.DestroySurface(instance, surface, null);
             vkContext.Dispose();
             window.Close();

@@ -35,6 +35,15 @@ namespace MafrixEngine.GraphicsWrapper
             bufferSize = DefaultBufferSize;
         }
 
+        public StagingBuffer(VkContext ctx)
+        {
+            this.vk = ctx.vk;
+            this.physicalDevice = ctx.physicalDevice;
+            this.device = ctx.device;
+            CreateStagtBuffer(DefaultBufferSize);
+            bufferSize = DefaultBufferSize;
+        }
+
         public StagingBuffer(Vk vk, PhysicalDevice physicalDevice, Device device, uint size)
         {
             this.vk = vk;
